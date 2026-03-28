@@ -29,7 +29,8 @@ def api_overview():
 
 @app.get('/api/paper')
 def api_paper():
-    return load_paper_state()
+    state = load_paper_state()
+    return {'running': state.get('running'), 'paused': state.get('paused'), 'metrics': state.get('metrics'), 'result': state.get('result'), 'config': state.get('config')}
 
 @app.get('/api/account')
 def api_account(market_type: str = 'futures'):
