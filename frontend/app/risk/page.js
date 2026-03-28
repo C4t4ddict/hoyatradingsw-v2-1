@@ -1,0 +1,1 @@
+export default function RiskPage(){ return (<><h1 className="page-title">리스크 가드</h1><p className="page-sub">손실 제한, 연속 손실, 동시 포지션 제한</p><div className="grid"><div className="card span-12"><div className="section-title">리스크 정책</div><p>Spot/Futures 가드 상태와 차단 이유를 보여주는 화면으로 이관됩니다.</p></div></div></>) }

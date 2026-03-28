@@ -1,0 +1,1 @@
+export default function PaperPage(){ return (<><h1 className="page-title">모의투자</h1><p className="page-sub">실전 전 검증을 위한 paper trading 중심 화면</p><div className="grid"><div className="card span-12"><div className="section-title">상태</div><p>현재 backend API 연동 전 단계입니다. 기존 paper 엔진은 backend에서 유지되며, 이후 제어/기록 화면이 이곳으로 이동됩니다.</p></div></div></>) }

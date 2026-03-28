@@ -1,0 +1,1 @@
+export default function AccountPage(){ return (<><h1 className="page-title">실시간 계정</h1><p className="page-sub">실거래 계정/포지션/손익 상태</p><div className="grid"><div className="card span-12"><div className="section-title">실시간 계정</div><p>FastAPI account/status API에 연결될 예정입니다.</p></div></div></>) }

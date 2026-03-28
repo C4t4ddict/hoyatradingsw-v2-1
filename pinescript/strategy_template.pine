@@ -1,0 +1,44 @@
+//@version=5
+strategy("BH Multi-Strategy Bot", overlay=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.05)
+
+// ===== Strategy ON/OFF =====
+use_ema = input.bool(true, "Use EMA Cross")
+use_rsi = input.bool(true, "Use RSI Filter")
+use_breakout = input.bool(false, "Use Breakout")
+
+// ===== Risk Params =====
+sl_pct = input.float(1.0, "Stop Loss %", step=0.1) / 100
+tp_rr = input.float(1.5, "Take Profit RR", step=0.1)
+
+// ===== Indicators =====
+ema_fast = ta.ema(close, 20)
+ema_slow = ta.ema(close, 50)
+rsi = ta.rsi(close, 14)
+high_break = ta.highest(high, 20)
+low_break = ta.lowest(low, 20)
+
+ema_long = use_ema and ta.crossover(ema_fast, ema_slow)
+ema_short = use_ema and ta.crossunder(ema_fast, ema_slow)
+rsi_ok_long = (not use_rsi) or rsi > 50
+rsi_ok_short = (not use_rsi) or rsi < 50
+bo_long = use_breakout and close > high_break[1]
+bo_short = use_breakout and close < low_break[1]
+
+long_cond = (ema_long or bo_long) and rsi_ok_long
+short_cond = (ema_short or bo_short) and rsi_ok_short
+
+if long_cond
+    strategy.entry("L", strategy.long)
+if short_cond
+    strategy.entry("S", strategy.short)
+
+long_sl = strategy.position_avg_price * (1 - sl_pct)
+long_tp = strategy.position_avg_price * (1 + sl_pct * tp_rr)
+short_sl = strategy.position_avg_price * (1 + sl_pct)
+short_tp = strategy.position_avg_price * (1 - sl_pct * tp_rr)
+
+strategy.exit("L-Exit", "L", stop=long_sl, limit=long_tp)
+strategy.exit("S-Exit", "S", stop=short_sl, limit=short_tp)
+
+plot(ema_fast, color=color.new(color.green, 0), title="EMA 20")
+plot(ema_slow, color=color.new(color.orange, 0), title="EMA 50")

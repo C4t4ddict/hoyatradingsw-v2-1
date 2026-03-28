@@ -1,0 +1,1 @@
+export default function IntelPage(){ return (<><h1 className="page-title">시장 인텔리전스</h1><p className="page-sub">뉴스 / 거시경제 / 국제정세 / ML 예측 통합</p><div className="grid"><div className="card span-12"><div className="section-title">설명</div><p>트럼프, 전쟁, 거시경제, ETF, 규제 이슈를 통합 분석하여 최종 의사결정에 반영합니다.</p></div></div></>) }

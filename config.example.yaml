@@ -1,0 +1,25 @@
+risk:
+  account_usdt: 1000
+  risk_per_trade: 0.01
+  max_position_usdt: 300
+  min_order_usdt: 10
+  target_rr: 1.5
+  default_stop_loss_pct: 0.01
+
+strategies:
+  ema_cross: true
+  rsi_filter: true
+  breakout: false
+
+trade:
+  allowed_symbols_spot: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+  allowed_symbols_futures: ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+  max_concurrent_positions_spot: 5
+  max_concurrent_positions_futures: 3
+  symbol_limits_spot:
+    "BTC/USDT": 2
+    "ETH/USDT": 2
+  symbol_limits_futures:
+    "BTC/USDT:USDT": 1
+    "ETH/USDT:USDT": 1
+  timeframe: "5m"

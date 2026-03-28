@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.streamlit/secrets.toml
+data/
+frontend/.next/
+frontend/node_modules/
