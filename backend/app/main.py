@@ -1,8 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from webhook_server import app as legacy_app, health, account_status
 from market_intel import get_market_brief
-from paper_live import load_state as load_paper_state
+from paper_live import load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, reset_session as reset_paper_session
 from performance import read_events, summarize
 from predict_model import predict_event
 
@@ -46,3 +46,17 @@ def api_intel():
 def api_risk():
     h = health()
     return {'risk_guard': h.get('risk_guard'), 'execution_policy': h.get('execution_policy')}
+
+
+@app.post("/api/paper/start")
+def api_paper_start():
+    cfg = {"market_type": "futures", "symbol": "BTC/USDT:USDT", "timeframe": "15m", "strategy": "ensemble_regime", "initial_usdt": 1000.0, "position_mode": "both", "leverage": 1.0}
+    return start_paper_session(cfg)
+
+@app.post("/api/paper/pause")
+def api_paper_pause():
+    return pause_paper_session()
+
+@app.post("/api/paper/reset")
+def api_paper_reset():
+    return reset_paper_session()
