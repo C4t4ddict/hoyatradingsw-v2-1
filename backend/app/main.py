@@ -1,63 +1,21 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from webhook_server import app as legacy_app, health, account_status
-from market_intel import get_market_brief
-from paper_live import load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, reset_session as reset_paper_session
-from performance import read_events, summarize
-from predict_model import predict_event
+from webhook_server import app as legacy_app
+from app.routes.overview import router as overview_router
+from app.routes.paper import router as paper_router
+from app.routes.account import router as account_router
+from app.routes.risk import router as risk_router
+from app.routes.intel import router as intel_router
 
 app = FastAPI(title='HoyaTradingSW v2.1 API')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 app.mount('/legacy', legacy_app)
+app.include_router(overview_router)
+app.include_router(paper_router)
+app.include_router(account_router)
+app.include_router(risk_router)
+app.include_router(intel_router)
 
 @app.get('/healthz')
 def healthz():
     return {'ok': True, 'message': 'v2.1 backend alive'}
-
-@app.get('/api/overview')
-def api_overview():
-    events = read_events()
-    summary = summarize(events)
-    brief = get_market_brief(force_refresh=False)
-    latest_event = (brief.get('top') or [{}])[0] if brief.get('top') else {}
-    ml = predict_event(latest_event) if latest_event else {}
-    return {
-        'summary': summary,
-        'market_brief': brief,
-        'ml_pred': ml,
-    }
-
-@app.get('/api/paper')
-def api_paper():
-    state = load_paper_state()
-    return {'running': state.get('running'), 'paused': state.get('paused'), 'metrics': state.get('metrics'), 'result': state.get('result'), 'config': state.get('config')}
-
-@app.get('/api/account')
-def api_account(market_type: str = 'futures'):
-    return account_status(market_type=market_type)
-
-@app.get('/api/intel')
-def api_intel():
-    brief = get_market_brief(force_refresh=True)
-    latest_event = (brief.get('top') or [{}])[0] if brief.get('top') else {}
-    ml = predict_event(latest_event) if latest_event else {}
-    return {'market_brief': brief, 'latest_event': latest_event, 'ml_pred': ml}
-
-@app.get('/api/risk')
-def api_risk():
-    h = health()
-    return {'risk_guard': h.get('risk_guard'), 'execution_policy': h.get('execution_policy')}
-
-
-@app.post("/api/paper/start")
-def api_paper_start():
-    cfg = {"market_type": "futures", "symbol": "BTC/USDT:USDT", "timeframe": "15m", "strategy": "ensemble_regime", "initial_usdt": 1000.0, "position_mode": "both", "leverage": 1.0}
-    return start_paper_session(cfg)
-
-@app.post("/api/paper/pause")
-def api_paper_pause():
-    return pause_paper_session()
-
-@app.post("/api/paper/reset")
-def api_paper_reset():
-    return reset_paper_session()
