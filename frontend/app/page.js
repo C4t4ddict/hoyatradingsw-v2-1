@@ -5,10 +5,18 @@ function fmt(n, suffix = '') {
   return `${v.toFixed(2)}${suffix}`
 }
 
+function buildRiskChip(risk){
+  const futures = risk?.risk_guard?.futures || {}
+  if (futures.enabled === false) return { label: 'Guardrail Off', className: 'bad' }
+  if (futures.max_leverage && Number(futures.max_leverage) <= 5) return { label: 'Guardrail Strict', className: 'warn' }
+  return { label: 'Guardrail Active', className: 'good' }
+}
+
 export default async function Page() {
-  let overview = null, paper = null
+  let overview = null, paper = null, risk = null
   try { overview = await fetchJson('/api/overview') } catch {}
   try { paper = await fetchJson('/api/paper') } catch {}
+  try { risk = await fetchJson('/api/risk') } catch {}
 
   const s = overview?.summary || {}
   const b = overview?.market_brief || {}
@@ -17,6 +25,7 @@ export default async function Page() {
   const d = ml?.decision || {}
   const top = b.top || []
   const pnlClass = Number(m.realized_pnl || s.realized_pnl || 0) >= 0 ? 'good' : 'bad'
+  const riskChip = buildRiskChip(risk)
 
   return (
     <>
@@ -54,7 +63,7 @@ export default async function Page() {
           <div style={{marginTop:18}}>
             <div className="split">
               <span className="metric-note">Fallback Strategy Status</span>
-              <span className="chip warn">{paper?.fallback_mode || 'selector-based fallback'}</span>
+              <span className="chip warn">{paper?.fallback_mode || 'inactive'}</span>
             </div>
             <div className="progress" style={{marginTop:10}}><span style={{width:`${Math.min(100, Math.max(8, Number(d.strength || 0) * 100))}%`}} /></div>
           </div>
@@ -95,7 +104,7 @@ export default async function Page() {
           <div className="metric-label">Open Positions</div>
           <div className="metric-value mono">{s.total_trades || 0}</div>
           <div className="section-sub">실시간 리스크 페이지에서 drawdown / daily loss / 실행 정책을 상세 확인</div>
-          <div className="chip warn">Guardrails Active</div>
+          <div className={`chip ${riskChip.className}`}>{riskChip.label}</div>
         </div>
 
         <div className="card span-12">

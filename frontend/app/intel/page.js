@@ -24,7 +24,7 @@ function trTopic(t=''){
   return t || '-'
 }
 
-function trTitle(t=''){
+function trTitle(t='') {
   return t
     .replaceAll('Bitcoin', '비트코인')
     .replaceAll('bitcoin', '비트코인')
@@ -97,11 +97,7 @@ export default async function IntelPage(){
             <div className="section-title">Intel Feed</div>
             <div className="section-sub">date-first / source / topic / L-S score / translated title 구조 유지</div>
           </div>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            <span className="chip">All Sources</span>
-            <span className="chip">All Topics</span>
-            <span className="chip warn">Recency Weighted</span>
-          </div>
+          <div className="metric-note">필터 UI는 실제 백엔드 필터 구현 전까지 제거하고, 현재는 최신 인텔 피드 자체에 집중</div>
         </div>
         <table className="table">
           <thead>

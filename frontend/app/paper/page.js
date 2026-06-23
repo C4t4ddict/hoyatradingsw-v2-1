@@ -13,13 +13,22 @@ export default function PaperPage(){
   const [leverage,setLeverage]=useState(10)
   const [initialUsdt,setInitialUsdt]=useState(1000)
 
-  const load=async()=>{ const r=await fetch(`${BASE}/api/paper`,{cache:'no-store'}); setData(await r.json()) }
-  useEffect(()=>{ load() },[])
+  const load=async()=>{ const r=await fetch(`${BASE}/api/paper`,{cache:'no-store'}); const j=await r.json(); setData(j); return j }
+  useEffect(()=>{ load().then((j)=>{
+    const cfg=j?.config||{}
+    if (cfg.symbol) setSymbol(cfg.symbol)
+    if (cfg.leverage != null) setLeverage(cfg.leverage)
+    if (cfg.initial_usdt != null) setInitialUsdt(cfg.initial_usdt)
+  }) },[])
 
   const call=async(path, body=null)=>{
     setLoading(true)
     await fetch(`${BASE}${path}`,{method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : null})
-    await load()
+    const j = await load()
+    const cfg=j?.config||{}
+    if (cfg.symbol) setSymbol(cfg.symbol)
+    if (cfg.leverage != null) setLeverage(cfg.leverage)
+    if (cfg.initial_usdt != null) setInitialUsdt(cfg.initial_usdt)
     setLoading(false)
   }
 
@@ -29,11 +38,6 @@ export default function PaperPage(){
       symbol,
       leverage:Number(leverage),
       initial_usdt:Number(initialUsdt),
-      timeframe:'15m',
-      strategy:'ensemble_regime',
-      position_mode:'both',
-      mode:'ml_signal',
-      live_refresh_sec:10,
     })
   }
 
@@ -41,17 +45,14 @@ export default function PaperPage(){
     await call('/api/paper/start', {
       market_type:'futures',
       symbol,
-      timeframe:'15m',
-      strategy:'ensemble_regime',
       initial_usdt:Number(initialUsdt),
-      position_mode:'both',
       leverage:Number(leverage),
-      mode:'ml_signal',
-      live_refresh_sec:10
+      ...(data?.config || {}),
     })
   }
 
   const m=data?.metrics||{}
+  const cfg=data?.config||{}
   const trades=(data?.result?.trades)||[]
   const d=data?.ml_signal?.decision||{}
   const s=data?.ml_signal?.scores||{}
@@ -86,9 +87,9 @@ export default function PaperPage(){
         <div className="metric-value">{runningState}</div>
         <div className="section-sub">현재 paper session 상태와 최신 운용 모드</div>
         <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
-          <span className="chip">{data?.executed_strategy || 'strategy -'}</span>
-          <span className="chip">{data?.executed_timeframe || 'tf -'}</span>
-          <span className="chip warn">{data?.fallback_mode || '-'}</span>
+          <span className="chip">{data?.executed_strategy || cfg.strategy || '-'}</span>
+          <span className="chip">{data?.executed_timeframe || cfg.timeframe || '-'}</span>
+          <span className="chip warn">{data?.fallback_mode || 'inactive'}</span>
         </div>
       </div>
 
@@ -106,7 +107,7 @@ export default function PaperPage(){
 
       <div className="card span-6">
         <div className="section-title">Config Panel</div>
-        <div className="section-sub">변경사항은 즉시 반영되는 운영 제어 패널</div>
+        <div className="section-sub">현재는 symbol / leverage / starting balance만 즉시 반영하고, 나머지 운용 로직은 백엔드 config 기준으로 유지</div>
         <div className="mini-grid">
           <div>
             <div className="metric-label">Symbol</div>
@@ -122,8 +123,8 @@ export default function PaperPage(){
             <input type="number" value={initialUsdt} onChange={e=>setInitialUsdt(e.target.value)} />
           </div>
           <div>
-            <div className="metric-label">Mode</div>
-            <div className="chip good">ml_signal</div>
+            <div className="metric-label">Mode / Strategy</div>
+            <div className="metric-note mono">{cfg.mode || '-'} / {cfg.strategy || '-'}</div>
           </div>
         </div>
         <div className="button-row" style={{marginTop:16}}>
@@ -139,7 +140,7 @@ export default function PaperPage(){
         <div className="section-title">Current Position Snapshot</div>
         <div className="mini-grid">
           <div><div className="metric-label">Side</div><div className="metric-value" style={{fontSize:24}}>{positionSummary.side}</div></div>
-          <div><div className="metric-label">Leverage</div><div className="metric-value mono" style={{fontSize:24}}>{fmt(leverage, 'x')}</div></div>
+          <div><div className="metric-label">Leverage</div><div className="metric-value mono" style={{fontSize:24}}>{fmt(cfg.leverage ?? leverage, 'x')}</div></div>
           <div><div className="metric-label">Entry</div><div className="metric-value mono" style={{fontSize:24}}>{positionSummary.entry}</div></div>
           <div><div className="metric-label">Exit / Current</div><div className="metric-value mono" style={{fontSize:24}}>{positionSummary.exit}</div></div>
           <div><div className="metric-label">PnL $</div><div className={`metric-value mono ${latestTradePnlClass}`} style={{fontSize:24}}>{positionSummary.pnl}</div></div>
@@ -158,7 +159,7 @@ export default function PaperPage(){
         <div className="section-sub">최근 체결 결과를 알림 메시지 형식으로 미리 보는 카드</div>
         <div className="card soft">
           <div style={{fontWeight:800, marginBottom:10}}>📡 Paper Trade Alert</div>
-          <div className="metric-note mono">시작 잔액: ${fmt(initialUsdt)}</div>
+          <div className="metric-note mono">시작 잔액: ${fmt(m.starting_balance ?? initialUsdt)}</div>
           <div className="metric-note mono">진입/청산: {positionSummary.entry} → {positionSummary.exit}</div>
           <div className={`metric-note mono ${latestTradePnlClass}`}>손익 $: {positionSummary.pnl}</div>
           <div className={`metric-note mono ${latestTradePnlClass}`}>손익 %: {positionSummary.pnlPct}</div>

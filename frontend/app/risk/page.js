@@ -4,6 +4,12 @@ function Row({label, value, className=''}){
   return <tr><td>{label}</td><td className={className}>{String(value ?? '-')}</td></tr>
 }
 
+function buildRiskState(spot, futures){
+  if (futures.enabled === false || spot.enabled === false) return { label: 'Guardrail Off', className: 'bad' }
+  if (futures.max_leverage && Number(futures.max_leverage) <= 5) return { label: 'Strict Policy', className: 'warn' }
+  return { label: 'Guardrail Active', className: 'good' }
+}
+
 export default async function RiskPage(){
   let data = null
   try { data = await fetchJson('/api/risk') } catch {}
@@ -17,6 +23,7 @@ export default async function RiskPage(){
     futures.max_leverage ? `max leverage ${futures.max_leverage}` : null,
     futures.allow_short === false ? 'short disabled' : null,
   ].filter(Boolean)
+  const riskState = buildRiskState(spot, futures)
 
   return (<>
     <div className="topbar">
@@ -24,7 +31,7 @@ export default async function RiskPage(){
         <div className="topbar-title">Risk Control Intelligence</div>
         <div className="topbar-sub">손실 제한, 연속 손실, 포지션 제한, 실행 정책을 운영 관점에서 보여주는 리스크 페이지</div>
       </div>
-      <div className="chip warn">Guardrails Active</div>
+      <div className={`chip ${riskState.className}`}>{riskState.label}</div>
     </div>
 
     <h1 className="page-title">Risk Control</h1>
@@ -62,7 +69,7 @@ export default async function RiskPage(){
         <div className="section-title">Warnings / Attention</div>
         <div className="section-sub">현재 실행 정책에서 주의해서 봐야 할 항목</div>
         <div style={{display:'flex', flexDirection:'column', gap:10}}>
-          {warnings.length ? warnings.map((w,i)=><div key={i} className="chip warn">{w}</div>) : <div className="chip good">No immediate warnings</div>}
+          {warnings.length ? warnings.map((w,i)=><div key={i} className="chip warn">{w}</div>) : <div className="chip good">Current policy looks stable</div>}
         </div>
       </div>
 
