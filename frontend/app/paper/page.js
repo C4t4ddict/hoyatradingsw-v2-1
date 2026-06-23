@@ -23,6 +23,20 @@ export default function PaperPage(){
     setLoading(false)
   }
 
+  const applyConfig=async()=>{
+    await call('/api/paper/config', {
+      market_type:'futures',
+      symbol,
+      leverage:Number(leverage),
+      initial_usdt:Number(initialUsdt),
+      timeframe:'15m',
+      strategy:'ensemble_regime',
+      position_mode:'both',
+      mode:'ml_signal',
+      live_refresh_sec:10,
+    })
+  }
+
   const startPaper=async()=>{
     await call('/api/paper/start', {
       market_type:'futures',
@@ -114,6 +128,7 @@ export default function PaperPage(){
         </div>
         <div className="button-row" style={{marginTop:16}}>
           <button onClick={startPaper} disabled={loading}>시작</button>
+          <button onClick={applyConfig} disabled={loading}>즉시 반영</button>
           <button onClick={()=>call('/api/paper/pause')} disabled={loading}>일시정지</button>
           <button onClick={()=>call('/api/paper/reset')} disabled={loading}>리셋</button>
           <button onClick={load} disabled={loading}>새로고침</button>
