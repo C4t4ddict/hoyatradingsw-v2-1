@@ -3,7 +3,7 @@ import os
 import signal
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict
 
 from backtest import fetch_ohlcv, fetch_funding_rates, run_backtest, run_ensemble_backtest
@@ -337,12 +337,24 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             save_state(state, path)
             return state
 
-    start_iso = state.get("started_at") or _now_iso()
-    end_iso = _now_iso()
+    end_dt = datetime.now(timezone.utc)
+    timeframe_history_map = {
+        '5m': timedelta(hours=12),
+        '15m': timedelta(days=2),
+        '30m': timedelta(days=4),
+        '1h': timedelta(days=7),
+        '4h': timedelta(days=30),
+    }
+    lookback_delta = timeframe_history_map.get(timeframe, timedelta(days=2))
+    start_iso = (end_dt - lookback_delta).isoformat()
+    end_iso = end_dt.isoformat()
 
     ex = get_exchange(read_only=True, market_type=("swap" if market_type == "futures" else "spot"))
     candles = fetch_ohlcv(ex, symbol, timeframe, start_iso, end_iso)
     if len(candles) < 80:
+        result = state.get('result') or {}
+        result['note'] = f"insufficient candles: {len(candles)} for {timeframe}"
+        state['result'] = result
         state["last_update"] = _now_iso()
         save_state(state, path)
         return state
