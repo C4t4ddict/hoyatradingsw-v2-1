@@ -109,6 +109,7 @@ def stop_background_worker():
 
 def start_session(config: Dict[str, Any], path: str = STATE_PATH):
     stop_background_worker()
+    initial_usdt = float(config.get("initial_usdt", 1000.0))
     state = {
         "running": True,
         "paused": False,
@@ -116,11 +117,27 @@ def start_session(config: Dict[str, Any], path: str = STATE_PATH):
         "last_update": None,
         "config": config,
         "metrics": {
-            "virtual_balance": config.get("initial_usdt", 1000.0),
+            "virtual_balance": initial_usdt,
+            "starting_balance": initial_usdt,
+            "realized_pnl": 0.0,
             "return_pct": 0.0,
             "trades": 0,
             "liquidations": 0,
         },
+        "result": {
+            "initial_usdt": initial_usdt,
+            "final_usdt": initial_usdt,
+            "return_pct": 0.0,
+            "trades": [],
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown_pct": 0.0,
+            "liquidation_count": 0,
+            "equity_curve": [],
+            "note": "fresh paper session"
+        },
+        "fallback_mode": None,
         "alert_last_trade_count": 0,
     }
     save_state(state, path)

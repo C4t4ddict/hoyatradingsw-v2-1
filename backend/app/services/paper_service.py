@@ -1,4 +1,4 @@
-from paper_live import load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, reset_session as reset_paper_session, stop_background_worker, resume_session as resume_paper_session
+from paper_live import load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, reset_session as reset_paper_session, stop_background_worker
 from market_intel import get_market_brief
 from backend.app.services.ml_signal_service import build_signal_summary
 
@@ -67,4 +67,5 @@ def update_paper_config(overrides: dict = None):
     }
     if overrides:
         current_cfg.update(overrides)
-    return resume_paper_session(current_cfg)
+    stop_background_worker()
+    return start_paper_session(current_cfg)
