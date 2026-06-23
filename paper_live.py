@@ -9,6 +9,11 @@ from typing import Any, Dict
 from backtest import fetch_ohlcv, fetch_funding_rates, run_backtest, run_ensemble_backtest
 from exchange import get_exchange
 from notifier import send_telegram
+from market_intel import get_market_brief
+try:
+    from app.services.ml_signal_service import build_signal_summary
+except Exception:
+    from backend.app.services.ml_signal_service import build_signal_summary
 
 STATE_PATH = os.getenv("PAPER_LIVE_STATE_PATH", "data/paper_live_state.json")
 PID_PATH = os.getenv("PAPER_LIVE_PID_PATH", "data/paper_live_worker.pid")
@@ -103,6 +108,7 @@ def stop_background_worker():
 
 
 def start_session(config: Dict[str, Any], path: str = STATE_PATH):
+    stop_background_worker()
     state = {
         "running": True,
         "paused": False,
@@ -149,6 +155,7 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
     state["running"] = True
     state["paused"] = False
 
+    state["fallback_mode"] = None
     if config_updates:
         cfg = state.get("config") or {}
         cfg.update(config_updates)
@@ -188,8 +195,8 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
         return
 
     symbol = cfg.get("symbol", "-")
-    strategy = cfg.get("strategy", "-")
-    timeframe = cfg.get("timeframe", "-")
+    strategy = state.get("executed_strategy") or cfg.get("strategy", "-")
+    timeframe = state.get("executed_timeframe") or cfg.get("timeframe", "-")
 
     for t in trades[prev_count:new_count]:
         side = str(t.get("side", "-")).upper()
@@ -197,14 +204,25 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
         exit_ = t.get("exit")
         pnl = t.get("pnl")
         pnl_pct = t.get("pnl_pct")
+        gross_pnl = t.get("gross_pnl")
+        entry_fee = t.get("entry_fee")
+        exit_fee = t.get("exit_fee")
+        funding_fee = t.get("funding_fee")
+        balance_before = t.get("balance_before")
+        balance_after = t.get("balance")
         msg = (
             "🧪 [Paper] 거래 체결\n"
             f"전략: {strategy} ({timeframe})\n"
             f"심볼: {symbol}\n"
             f"방향: {side}\n"
-            f"진입: {entry}\n"
-            f"청산: {exit_}\n"
-            f"PnL: {pnl} ({pnl_pct}%)"
+            f"시작 잔액: {round(float(balance_before or 0), 2)}\n"
+            f"진입: {round(float(entry or 0), 4)}\n"
+            f"청산: {round(float(exit_ or 0), 4)}\n"
+            f"총손익: {round(float(gross_pnl or 0), 2)}\n"
+            f"수수료: {round(float((entry_fee or 0) + (exit_fee or 0)), 2)}\n"
+            f"펀딩비: {round(float(funding_fee or 0), 2)}\n"
+            f"순손익: {round(float(pnl or 0), 2)} ({round(float(pnl_pct or 0), 2)}%)\n"
+            f"종료 잔액: {round(float(balance_after or 0), 2)}"
         )
         send_telegram(msg, channel="paper")
 
@@ -217,10 +235,50 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         return state
 
     cfg = state.get("config") or {}
+    state["fallback_mode"] = None
     market_type = cfg.get("market_type", "futures")
     symbol = cfg.get("symbol", "BTC/USDT:USDT")
     timeframe = cfg.get("timeframe", "15m")
     strategy = cfg.get("strategy", "ensemble_regime")
+    position_mode = cfg.get("position_mode", "both")
+
+    if cfg.get("mode") == "ml_signal":
+        brief = get_market_brief(force_refresh=True)
+        latest_event = ((brief.get('top') or [{}])[0])
+        ml_signal = build_signal_summary(latest_event, brief) if latest_event else {}
+        decision = ml_signal.get('decision') or {}
+        scores = ml_signal.get('scores') or {}
+        state['ml_signal'] = ml_signal
+        if decision.get('bias') in ['short', 'lean_short']:
+            position_mode = 'short'
+            strategy = 'trend_continuation_system'
+            timeframe = '15m'
+        elif decision.get('bias') in ['long', 'lean_long']:
+            position_mode = 'long'
+            strategy = 'trend_continuation_system'
+            timeframe = '5m' if (scores.get('up_5m', 0) >= scores.get('up_30m', 0)) else '30m'
+        else:
+            state['fallback_mode'] = 'neutral_selector'
+            if scores.get('down_5m', 0) > 0.45 or scores.get('down_15m', 0) > 0.45:
+                strategy = 'breakout_20'
+                position_mode = 'short'
+                timeframe = '5m'
+                cfg['sl_pct'] = 0.3
+                cfg['tp_rr'] = 2.6
+            elif scores.get('up_5m', 0) > 0.45 or scores.get('up_15m', 0) > 0.45:
+                strategy = 'trend_continuation_system'
+                position_mode = 'long'
+                timeframe = '5m'
+                cfg['sl_pct'] = 0.3
+                cfg['tp_rr'] = 2.6
+            else:
+                strategy = 'rsi_reversion'
+                position_mode = 'both'
+                timeframe = '5m'
+                cfg['rsi_lower'] = 47
+                cfg['rsi_upper'] = 53
+                cfg['sl_pct'] = 0.25
+                cfg['tp_rr'] = 2.2
 
     start_iso = state.get("started_at") or _now_iso()
     end_iso = _now_iso()
@@ -236,11 +294,17 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     if market_type == "futures" and cfg.get("use_binance_funding", True):
         funding_events = fetch_funding_rates(ex, symbol, start_iso, end_iso)
 
+    current_metrics = state.get("metrics") or {}
+    session_initial_usdt = float(cfg.get("initial_usdt", 1000.0))
+    if current_metrics.get("virtual_balance") not in [None, 0, 0.0] and state.get("result"):
+        session_initial_usdt = float(current_metrics.get("virtual_balance", session_initial_usdt))
+
     common = {
-        "initial_usdt": float(cfg.get("initial_usdt", 1000.0)),
-        "position_mode": cfg.get("position_mode", "both"),
+        "initial_usdt": session_initial_usdt,
+        "position_mode": position_mode,
         "leverage": float(cfg.get("leverage", 1)),
-        "funding_rate_per_8h": float(cfg.get("funding_rate_per_8h", 0.0)),
+        "fee_pct": float(cfg.get("fee_pct", 0.0005)),
+        "funding_rate_per_8h": float(cfg.get("funding_rate_per_8h", 0.0001)),
         "funding_events": funding_events,
     }
 
@@ -278,7 +342,14 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         "return_pct": float(result.get("return_pct", 0.0)),
         "trades": int(result.get("total_trades", 0)),
         "liquidations": int(result.get("liquidation_count", 0)),
+        "realized_pnl": float(result.get("final_usdt", common["initial_usdt"]) - common["initial_usdt"]),
+        "starting_balance": float(common["initial_usdt"]),
     }
     state["result"] = result
+    state["executed_strategy"] = strategy
+    state["executed_timeframe"] = timeframe
+    state["executed_position_mode"] = position_mode
+    if cfg.get('mode') == 'ml_signal' and state.get('fallback_mode'):
+        state['result']['note'] = f"neutral fallback active: {state.get('fallback_mode')}"
     save_state(state, path)
     return state
