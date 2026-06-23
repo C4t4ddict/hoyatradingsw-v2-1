@@ -266,36 +266,76 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         decision = ml_signal.get('decision') or {}
         scores = ml_signal.get('scores') or {}
         state['ml_signal'] = ml_signal
-        if decision.get('bias') in ['short', 'lean_short']:
+
+        recent_trades = ((state.get('result') or {}).get('trades') or [])[-3:]
+        consecutive_losses = 0
+        for trade in reversed(recent_trades):
+            if float(trade.get('pnl', 0) or 0) < 0:
+                consecutive_losses += 1
+            else:
+                break
+
+        no_trade = False
+        if consecutive_losses >= 2:
+            state['fallback_mode'] = 'cooldown_after_losses'
+            no_trade = True
+
+        if not no_trade and decision.get('bias') in ['short', 'lean_short']:
             position_mode = 'short'
             strategy = 'trend_continuation_system'
             timeframe = '15m'
-        elif decision.get('bias') in ['long', 'lean_long']:
+        elif not no_trade and decision.get('bias') in ['long', 'lean_long']:
             position_mode = 'long'
             strategy = 'trend_continuation_system'
-            timeframe = '5m' if (scores.get('up_5m', 0) >= scores.get('up_30m', 0)) else '30m'
+            timeframe = '15m' if (scores.get('up_15m', 0) >= scores.get('up_5m', 0)) else '30m'
         else:
-            state['fallback_mode'] = 'neutral_selector'
-            if scores.get('down_5m', 0) > 0.45 or scores.get('down_15m', 0) > 0.45:
-                strategy = 'breakout_20'
-                position_mode = 'short'
-                timeframe = '5m'
-                cfg['sl_pct'] = 0.3
-                cfg['tp_rr'] = 2.6
-            elif scores.get('up_5m', 0) > 0.45 or scores.get('up_15m', 0) > 0.45:
-                strategy = 'trend_continuation_system'
-                position_mode = 'long'
-                timeframe = '5m'
-                cfg['sl_pct'] = 0.3
-                cfg['tp_rr'] = 2.6
-            else:
-                strategy = 'rsi_reversion'
-                position_mode = 'both'
-                timeframe = '5m'
-                cfg['rsi_lower'] = 47
-                cfg['rsi_upper'] = 53
-                cfg['sl_pct'] = 0.25
-                cfg['tp_rr'] = 2.2
+            if not no_trade:
+                state['fallback_mode'] = 'neutral_selector_strict'
+
+                short_agree = scores.get('down_5m', 0) > 0.53 and scores.get('down_15m', 0) > 0.52 and scores.get('intel_short_score', 0) >= scores.get('intel_long_score', 0)
+                long_agree = scores.get('up_5m', 0) > 0.53 and scores.get('up_15m', 0) > 0.52 and scores.get('intel_long_score', 0) >= scores.get('intel_short_score', 0)
+                reversion_agree = (
+                    abs((scores.get('intel_long_score', 0) - scores.get('intel_short_score', 0))) < 1.2 and
+                    max(scores.get('up_5m', 0), scores.get('down_5m', 0), scores.get('up_15m', 0), scores.get('down_15m', 0)) < 0.58
+                )
+
+                if short_agree:
+                    strategy = 'breakout_20'
+                    position_mode = 'short'
+                    timeframe = '15m'
+                    cfg['sl_pct'] = 0.22
+                    cfg['tp_rr'] = 2.8
+                elif long_agree:
+                    strategy = 'trend_continuation_system'
+                    position_mode = 'long'
+                    timeframe = '15m'
+                    cfg['sl_pct'] = 0.22
+                    cfg['tp_rr'] = 2.8
+                elif reversion_agree:
+                    strategy = 'rsi_reversion'
+                    position_mode = 'long'
+                    timeframe = '15m'
+                    cfg['rsi_lower'] = 42
+                    cfg['rsi_upper'] = 58
+                    cfg['sl_pct'] = 0.18
+                    cfg['tp_rr'] = 2.4
+                else:
+                    state['fallback_mode'] = 'neutral_wait'
+                    no_trade = True
+
+        if no_trade:
+            strategy = 'rsi_reversion'
+            position_mode = 'long'
+            timeframe = '15m'
+            result = state.get('result') or {}
+            result['note'] = f"paper hold: {state.get('fallback_mode') or 'no_trade'}"
+            state['result'] = result
+            state['executed_strategy'] = 'hold'
+            state['executed_timeframe'] = timeframe
+            state['executed_position_mode'] = 'flat'
+            state['last_update'] = _now_iso()
+            save_state(state, path)
+            return state
 
     start_iso = state.get("started_at") or _now_iso()
     end_iso = _now_iso()
