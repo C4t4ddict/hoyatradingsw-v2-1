@@ -1,15 +1,8 @@
 import './globals.css'
-import Link from 'next/link'
+import NavClient from './NavClient'
 
 export const metadata = { title: 'HoyaTradingSW v2.1', description: 'Intel-driven trading platform' }
 
-const navItems = [
-  { href: '/', label: 'Dashboard' },
-  { href: '/intel', label: 'Market Intel' },
-  { href: '/paper', label: 'Paper Trading' },
-  { href: '/risk', label: 'Risk Control' },
-  { href: '/account', label: 'Account' },
-]
 
 export default function RootLayout({ children }) {
   return (
@@ -21,11 +14,7 @@ export default function RootLayout({ children }) {
               <div className="brand">HoyaTradingSW</div>
               <div className="brand-sub">v2.1 luminous intelligence</div>
             </div>
-            <nav className="nav">
-              {navItems.map((item) => (
-                <Link key={item.href} href={item.href}>{item.label}</Link>
-              ))}
-            </nav>
+            <nav className="nav"><NavClient /></nav>
             <div className="sidebar-footer">
               <div className="metric-label">Product Focus</div>
               <div style={{fontWeight:800, marginBottom:8}}>Live Intel + ML + Paper Ops</div>
