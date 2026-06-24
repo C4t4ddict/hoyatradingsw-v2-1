@@ -73,7 +73,7 @@ def main():
         print("dataset not found")
         return
     df = pd.read_csv(DATASET_CSV)
-    for target_col in ["label_up_5m", "label_up_15m", "label_up_1h", "label_up_4h", "label_up_24h"]:
+    for target_col in ["label_up_5m", "label_up_15m", "label_up_30m", "label_up_1h", "label_up_4h", "label_up_24h"]:
         train_one(df, target_col)
 
 

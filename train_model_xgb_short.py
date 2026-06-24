@@ -53,7 +53,7 @@ def train_one(df: pd.DataFrame, target_col: str):
 
 def main():
     df = pd.read_csv(DATASET_CSV)
-    for col in ["label_up_5m", "label_up_15m"]:
+    for col in ["label_up_5m", "label_up_15m", "label_up_30m"]:
         train_one(df, col)
 
 

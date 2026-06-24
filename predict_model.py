@@ -7,8 +7,8 @@ MODEL_DIR_XGB_SHORT = Path("data/models_xgb_short")
 
 
 def _load_bundle(target_col: str):
-    # 정책: 5m/15m은 XGBoost short 전용, 1h/4h/24h는 기존 안정 모델 유지
-    search_dirs = [MODEL_DIR_XGB_SHORT] if target_col in ["label_up_5m", "label_up_15m"] else [MODEL_DIR]
+    # 정책: 5m/15m/30m은 XGBoost short 전용, 1h/4h/24h는 기존 안정 모델 유지
+    search_dirs = [MODEL_DIR_XGB_SHORT] if target_col in ["label_up_5m", "label_up_15m", "label_up_30m"] else [MODEL_DIR]
     for base in search_dirs:
         model_path = base / f"{target_col}.joblib"
         if model_path.exists():
@@ -62,6 +62,6 @@ def _predict_one(event: dict, target_col: str) -> dict:
 
 def predict_event(event: dict) -> dict:
     out = {}
-    for target_col in ["label_up_5m", "label_up_15m", "label_up_1h", "label_up_4h", "label_up_24h"]:
+    for target_col in ["label_up_5m", "label_up_15m", "label_up_30m", "label_up_1h", "label_up_4h", "label_up_24h"]:
         out[target_col] = _predict_one(event, target_col)
     return out

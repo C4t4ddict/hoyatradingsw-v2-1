@@ -667,7 +667,9 @@ def run_backtest(
                     gross = (exit_price - position["entry"]) * position["qty"]
                 else:
                     gross = (position["entry"] - exit_price) * position["qty"]
-                fees = (position["entry"] * position["qty"] + exit_price * position["qty"]) * fee_pct
+                entry_fee = (position["entry"] * position["qty"]) * fee_pct
+                exit_fee = (exit_price * position["qty"]) * fee_pct
+                fees = entry_fee + exit_fee
 
                 hold_hours = max(0.0, (ts - position["entry_ts"]) / 1000.0 / 3600.0)
                 funding_periods = hold_hours / 8.0
@@ -684,8 +686,10 @@ def run_backtest(
                 else:
                     funding_fee = notional * funding_rate_per_8h * funding_periods
 
+                balance_before = usdt
                 pnl = gross - fees - funding_fee
                 usdt += pnl
+                pnl_pct = ((pnl / balance_before) * 100.0) if balance_before else 0.0
                 trades.append({
                     "strategy": strategy,
                     "side": position.get("side", "long"),
@@ -693,11 +697,18 @@ def run_backtest(
                     "exit_ts": ts,
                     "entry": position["entry"],
                     "exit": exit_price,
+                    "gross_pnl": gross,
+                    "entry_fee": entry_fee,
+                    "exit_fee": exit_fee,
+                    "fees": fees,
+                    "funding_hours": hold_hours,
                     "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "balance_before": balance_before,
+                    "balance": usdt,
                     "funding_fee": funding_fee,
                     "liq_price": position.get("liq_price"),
                     "reason": reason,
-                    "balance": usdt,
                     "entry_i": position["entry_i"],
                     "exit_i": i,
                 })

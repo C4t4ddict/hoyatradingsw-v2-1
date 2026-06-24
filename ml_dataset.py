@@ -10,10 +10,17 @@ EVENTS_PATH = Path("data/ml_events.jsonl")
 DATASET_CSV = Path("data/ml_dataset.csv")
 
 UP_TH_5M = float(os.getenv("ML_LABEL_UP_TH_5M", "0.20"))
-UP_TH_15M = float(os.getenv("ML_LABEL_UP_TH_15M", "0.35"))
-UP_TH_1H = float(os.getenv("ML_LABEL_UP_TH_1H", "0.70"))
-UP_TH_4H = float(os.getenv("ML_LABEL_UP_TH_4H", "1.50"))
-UP_TH_24H = float(os.getenv("ML_LABEL_UP_TH_24H", "2.50"))
+UP_TH_15M = float(os.getenv("ML_LABEL_UP_TH_15M", "0.30"))
+UP_TH_30M = float(os.getenv("ML_LABEL_UP_TH_30M", "0.40"))
+UP_TH_1H = float(os.getenv("ML_LABEL_UP_TH_1H", "0.60"))
+UP_TH_4H = float(os.getenv("ML_LABEL_UP_TH_4H", "1.20"))
+UP_TH_24H = float(os.getenv("ML_LABEL_UP_TH_24H", "2.00"))
+DOWN_TH_5M = float(os.getenv("ML_LABEL_DOWN_TH_5M", "-0.20"))
+DOWN_TH_15M = float(os.getenv("ML_LABEL_DOWN_TH_15M", "-0.30"))
+DOWN_TH_30M = float(os.getenv("ML_LABEL_DOWN_TH_30M", "-0.40"))
+DOWN_TH_1H = float(os.getenv("ML_LABEL_DOWN_TH_1H", "-0.60"))
+DOWN_TH_4H = float(os.getenv("ML_LABEL_DOWN_TH_4H", "-1.20"))
+DOWN_TH_24H = float(os.getenv("ML_LABEL_DOWN_TH_24H", "-2.00"))
 
 
 def append_events(rows: List[Dict]):
@@ -73,13 +80,14 @@ def _prepare_cdf(candles: List[List], tf_minutes: int) -> pd.DataFrame:
     return cdf
 
 
-def enrich_with_price_labels(events: List[Dict], candles_1h: List[List], candles_5m: List[List] = None, candles_15m: List[List] = None) -> pd.DataFrame:
+def enrich_with_price_labels(events: List[Dict], candles_1h: List[List], candles_5m: List[List] = None, candles_15m: List[List] = None, candles_30m: List[List] = None) -> pd.DataFrame:
     if not events or not candles_1h:
         return pd.DataFrame()
 
     cdf_1h = _prepare_cdf(candles_1h, 60)
     cdf_5m = _prepare_cdf(candles_5m, 5) if candles_5m else None
     cdf_15m = _prepare_cdf(candles_15m, 15) if candles_15m else None
+    cdf_30m = _prepare_cdf(candles_30m, 30) if candles_30m else None
 
     rows = []
     for e in events:
@@ -111,6 +119,7 @@ def enrich_with_price_labels(events: List[Dict], candles_1h: List[List], candles
 
         r5m = future_return(cdf_5m, 5)
         r15m = future_return(cdf_15m, 15)
+        r30m = future_return(cdf_30m, 30)
         r1h = future_return(cdf_1h, 60)
         r4h = future_return(cdf_1h, 240)
         r24h = future_return(cdf_1h, 1440)
@@ -122,20 +131,28 @@ def enrich_with_price_labels(events: List[Dict], candles_1h: List[List], candles
             "market_volume_ratio": float(base_row.get("volume_ratio") or 0.0),
             "return_5m": r5m,
             "return_15m": r15m,
+            "return_30m": r30m,
             "return_1h": r1h,
             "return_4h": r4h,
             "return_24h": r24h,
             "label_up_5m": None if r5m is None else int(r5m >= UP_TH_5M),
+            "label_down_5m": None if r5m is None else int(r5m <= DOWN_TH_5M),
             "label_up_15m": None if r15m is None else int(r15m >= UP_TH_15M),
+            "label_down_15m": None if r15m is None else int(r15m <= DOWN_TH_15M),
+            "label_up_30m": None if r30m is None else int(r30m >= UP_TH_30M),
+            "label_down_30m": None if r30m is None else int(r30m <= DOWN_TH_30M),
             "label_up_1h": None if r1h is None else int(r1h >= UP_TH_1H),
+            "label_down_1h": None if r1h is None else int(r1h <= DOWN_TH_1H),
             "label_up_4h": None if r4h is None else int(r4h >= UP_TH_4H),
+            "label_down_4h": None if r4h is None else int(r4h <= DOWN_TH_4H),
             "label_up_24h": None if r24h is None else int(r24h >= UP_TH_24H),
+            "label_down_24h": None if r24h is None else int(r24h <= DOWN_TH_24H),
         })
         rows.append(row)
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        corr_cols = [c for c in ["return_5m", "return_15m", "return_1h", "return_4h", "return_24h"] if c in df.columns]
+        corr_cols = [c for c in ["return_5m", "return_15m", "return_30m", "return_1h", "return_4h", "return_24h"] if c in df.columns]
         if len(corr_cols) >= 2:
             corr = df[corr_cols].corr(numeric_only=True).fillna(0.0)
             df.attrs["corr"] = corr.to_dict()
