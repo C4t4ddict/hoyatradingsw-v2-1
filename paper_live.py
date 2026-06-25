@@ -1,8 +1,10 @@
 import json
+import hashlib
 import os
 import signal
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict
 
@@ -17,6 +19,83 @@ except Exception:
 
 STATE_PATH = os.getenv("PAPER_LIVE_STATE_PATH", "data/paper_live_state.json")
 PID_PATH = os.getenv("PAPER_LIVE_PID_PATH", "data/paper_live_worker.pid")
+LOCK_PATH = os.getenv("PAPER_LIVE_LOCK_PATH", "data/paper_live_worker.lock")
+
+SESSION_DIR = os.getenv("PAPER_LIVE_SESSION_DIR", "data/paper_sessions")
+
+
+def _session_paths(session_id: str):
+    base = os.path.join(SESSION_DIR, session_id)
+    return {
+        "base": base,
+        "session": os.path.join(base, "session.json"),
+        "trades": os.path.join(base, "trades.jsonl"),
+        "alerts": os.path.join(base, "alerts.jsonl"),
+    }
+
+
+def _append_jsonl(path: str, payload: Dict[str, Any]):
+    _ensure_parent(path)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _persist_session_snapshot(state: Dict[str, Any]):
+    session_id = state.get("session_id")
+    if not session_id:
+        return
+    paths = _session_paths(session_id)
+    payload = {
+        "session_id": session_id,
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "config": state.get("config"),
+        "metrics": state.get("metrics"),
+        "executed_strategy": state.get("executed_strategy"),
+        "executed_timeframe": state.get("executed_timeframe"),
+        "executed_position_mode": state.get("executed_position_mode"),
+        "fallback_mode": state.get("fallback_mode"),
+        "status": {"running": state.get("running"), "paused": state.get("paused")},
+    }
+    _ensure_parent(paths["session"])
+    with open(paths["session"], "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _trade_fingerprint(trade: Dict[str, Any]) -> str:
+    raw = "|".join([
+        str(trade.get("entry_ts", "")),
+        str(trade.get("exit_ts", "")),
+        str(trade.get("side", "")),
+        str(trade.get("entry", "")),
+        str(trade.get("exit", "")),
+    ])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _sync_trade_history(state: Dict[str, Any], result: Dict[str, Any]):
+    session_id = state.get("session_id")
+    if not session_id:
+        return
+    paths = _session_paths(session_id)
+    seen = set(state.get("seen_trade_ids") or [])
+    for trade in result.get("trades") or []:
+        trade_id = trade.get("trade_id") or _trade_fingerprint(trade)
+        trade["trade_id"] = trade_id
+        if trade_id in seen:
+            continue
+        seen.add(trade_id)
+        _append_jsonl(paths["trades"], {"session_id": session_id, **trade})
+    state["seen_trade_ids"] = sorted(seen)
+
+
+def _append_alert_log(state: Dict[str, Any], trade_id: str, message: str):
+    session_id = state.get("session_id")
+    if not session_id:
+        return
+    paths = _session_paths(session_id)
+    _append_jsonl(paths["alerts"], {"session_id": session_id, "trade_id": trade_id, "sent_at": _now_iso(), "message": message})
+
 
 
 def _ensure_parent(path: str):
@@ -28,6 +107,72 @@ def _ensure_parent(path: str):
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+
+
+def _read_json(path: str, default: Dict[str, Any] = None) -> Dict[str, Any]:
+    if default is None:
+        default = {}
+    if not os.path.exists(path):
+        return dict(default)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else dict(default)
+    except Exception:
+        return dict(default)
+
+
+def _acquire_lock(path: str = LOCK_PATH) -> bool:
+    _ensure_parent(path)
+    pid = os.getpid()
+    now = _now_iso()
+    if os.path.exists(path):
+        current = _read_json(path, {})
+        lock_pid = int(current.get("pid") or 0)
+        if lock_pid and _is_pid_alive(lock_pid) and lock_pid != pid:
+            return False
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"pid": pid, "acquired_at": now}, f, ensure_ascii=False, indent=2)
+    return True
+
+
+def _release_lock(path: str = LOCK_PATH):
+    try:
+        if os.path.exists(path):
+            current = _read_json(path, {})
+            lock_pid = int(current.get("pid") or 0)
+            if lock_pid in [0, os.getpid()]:
+                os.remove(path)
+    except Exception:
+        pass
+
+
+def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "session_id": state.get("session_id"),
+        "running": state.get("running"),
+        "paused": state.get("paused"),
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "worker_pid": state.get("worker_pid"),
+        "config": state.get("config"),
+        "metrics": state.get("metrics"),
+        "result": state.get("result"),
+        "ml_signal": state.get("ml_signal"),
+        "executed_strategy": state.get("executed_strategy"),
+        "executed_timeframe": state.get("executed_timeframe"),
+        "executed_position_mode": state.get("executed_position_mode"),
+        "fallback_mode": state.get("fallback_mode"),
+        "alert_last_trade_count": state.get("alert_last_trade_count"),
+        "seen_trade_ids": state.get("seen_trade_ids"),
+        "sent_alert_trade_ids": state.get("sent_alert_trade_ids"),
+        "config_snapshot": state.get("config_snapshot"),
+    }
+
+
+def _sanitize_state_for_disk(state: Dict[str, Any]) -> Dict[str, Any]:
+    return _build_runtime_state(state)
 
 def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
     if not os.path.exists(path):
@@ -42,8 +187,9 @@ def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
 
 def save_state(state: Dict[str, Any], path: str = STATE_PATH):
     _ensure_parent(path)
+    disk_state = _sanitize_state_for_disk(state)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(disk_state, f, ensure_ascii=False, indent=2)
 
 
 def _read_pid(path: str = PID_PATH) -> int:
@@ -105,12 +251,15 @@ def stop_background_worker():
         except Exception:
             pass
     _clear_pid()
+    _release_lock()
 
 
 def start_session(config: Dict[str, Any], path: str = STATE_PATH):
     stop_background_worker()
     initial_usdt = float(config.get("initial_usdt", 1000.0))
+    session_id = str(uuid.uuid4())
     state = {
+        "session_id": session_id,
         "running": True,
         "paused": False,
         "started_at": _now_iso(),
@@ -139,11 +288,16 @@ def start_session(config: Dict[str, Any], path: str = STATE_PATH):
         },
         "fallback_mode": None,
         "alert_last_trade_count": 0,
+        "seen_trade_ids": [],
+        "config_snapshot": dict(config),
     }
     save_state(state, path)
+    _persist_session_snapshot(state)
     pid = start_background_worker()
     state["worker_pid"] = pid
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -152,6 +306,7 @@ def pause_session(path: str = STATE_PATH):
     state["running"] = False
     state["paused"] = True
     save_state(state, path)
+    _persist_session_snapshot(state)
     stop_background_worker()
     return state
 
@@ -185,6 +340,8 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
     pid = start_background_worker()
     state["worker_pid"] = pid
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -197,6 +354,8 @@ def reset_session(path: str = STATE_PATH):
     stop_background_worker()
     state = {"running": False, "paused": False, "reset_at": _now_iso(), "metrics": {"virtual_balance": 0.0, "return_pct": 0.0, "trades": 0, "liquidations": 0}}
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -212,10 +371,15 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
         return
 
     symbol = cfg.get("symbol", "-")
+    sent_ids = set(state.get("sent_alert_trade_ids") or [])
     strategy = state.get("executed_strategy") or cfg.get("strategy", "-")
     timeframe = state.get("executed_timeframe") or cfg.get("timeframe", "-")
 
     for t in trades[prev_count:new_count]:
+        trade_id = t.get("trade_id") or _trade_fingerprint(t)
+        t["trade_id"] = trade_id
+        if trade_id in sent_ids:
+            continue
         side = str(t.get("side", "-")).upper()
         entry = t.get("entry")
         exit_ = t.get("exit")
@@ -242,11 +406,16 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
             f"종료 잔액: {round(float(balance_after or 0), 2)}"
         )
         send_telegram(msg, channel="paper")
+        sent_ids.add(trade_id)
+        _append_alert_log(state, trade_id, msg)
 
+    state["sent_alert_trade_ids"] = sorted(sent_ids)
     state["alert_last_trade_count"] = new_count
 
 
 def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
+    if not _acquire_lock():
+        return load_state(path)
     state = load_state(path)
     if not state.get("running"):
         return state
@@ -335,6 +504,8 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             state['executed_position_mode'] = 'flat'
             state['last_update'] = _now_iso()
             save_state(state, path)
+            _persist_session_snapshot(state)
+            _release_lock()
             return state
 
     end_dt = datetime.now(timezone.utc)
@@ -357,6 +528,8 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         state['result'] = result
         state["last_update"] = _now_iso()
         save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
         return state
 
     funding_events = None
@@ -403,6 +576,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             tp_rr=float(cfg.get("tp_rr", 1.5)),
         )
 
+    _sync_trade_history(state, result)
     _notify_new_trades(state, cfg, result)
 
     state["last_update"] = _now_iso()
@@ -421,4 +595,6 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     if cfg.get('mode') == 'ml_signal' and state.get('fallback_mode'):
         state['result']['note'] = f"neutral fallback active: {state.get('fallback_mode')}"
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
