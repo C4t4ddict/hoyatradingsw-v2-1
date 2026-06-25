@@ -497,6 +497,43 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
     state["alert_last_trade_count"] = new_count
 
 
+
+
+def get_audit_payload(path: str = STATE_PATH) -> Dict[str, Any]:
+    state = load_state(path)
+    pid = _read_pid()
+    lock = _read_json(LOCK_PATH, {})
+    consistency = state.get("consistency") or _build_consistency_report(state)
+    runtime_guard = state.get("runtime_guard") or {}
+    return {
+        "session_id": state.get("session_id"),
+        "running": state.get("running"),
+        "paused": state.get("paused"),
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "worker": {
+            "pid": pid,
+            "alive": _is_pid_alive(pid),
+        },
+        "lock": {
+            "path": LOCK_PATH,
+            "pid": lock.get("pid"),
+            "alive": _is_pid_alive(int(lock.get("pid") or 0)),
+            "acquired_at": lock.get("acquired_at"),
+        },
+        "metrics": state.get("metrics"),
+        "executed": {
+            "strategy": state.get("executed_strategy"),
+            "timeframe": state.get("executed_timeframe"),
+            "position_mode": state.get("executed_position_mode"),
+            "fallback_mode": state.get("fallback_mode"),
+        },
+        "consistency": consistency,
+        "runtime_guard": runtime_guard,
+        "config_snapshot": state.get("config_snapshot"),
+        "config": state.get("config"),
+    }
+
 def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     if not _acquire_lock():
         return load_state(path)
