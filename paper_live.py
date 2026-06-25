@@ -194,6 +194,34 @@ def _build_consistency_report(state: Dict[str, Any]) -> Dict[str, Any]:
     return report
 
 
+
+
+def _apply_runtime_mismatch_guards(state: Dict[str, Any]) -> Dict[str, Any]:
+    consistency = state.get("consistency") or _build_consistency_report(state)
+    snapshot = state.get("config_snapshot") or {}
+    config = state.get("config") or {}
+    mismatch_keys = []
+    for key in ["symbol", "leverage", "initial_usdt", "market_type", "mode"]:
+        if key in snapshot and key in config and snapshot.get(key) != config.get(key):
+            mismatch_keys.append(key)
+
+    state["runtime_guard"] = {
+        "hasMismatch": bool(mismatch_keys),
+        "mismatchKeys": mismatch_keys,
+        "consistencyOk": consistency.get("ok", True),
+    }
+
+    if mismatch_keys:
+        state["fallback_mode"] = "runtime_mismatch_hold"
+        result = state.get("result") or {}
+        note = result.get("note") or ""
+        msg = f"runtime mismatch detected: {', '.join(mismatch_keys)}"
+        result["note"] = (f"{note} | {msg}").strip(" |")
+        state["result"] = result
+        state["executed_strategy"] = "hold"
+        state["executed_position_mode"] = "flat"
+    return state
+
 def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": state.get("session_id"),
@@ -215,6 +243,7 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "sent_alert_trade_ids": state.get("sent_alert_trade_ids"),
         "config_snapshot": state.get("config_snapshot"),
         "consistency": state.get("consistency"),
+        "runtime_guard": state.get("runtime_guard"),
     }
 
 
@@ -377,6 +406,14 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
     state["fallback_mode"] = None
     if config_updates:
         cfg = state.get("config") or {}
+    state["consistency"] = _build_consistency_report(state)
+    state = _apply_runtime_mismatch_guards(state)
+    if (state.get("runtime_guard") or {}).get("hasMismatch"):
+        state["last_update"] = _now_iso()
+        save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
+        return state
         cfg.update(config_updates)
         state["config"] = cfg
 
@@ -466,9 +503,18 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     state = load_state(path)
     if not state.get("running"):
         state["consistency"] = _build_consistency_report(state)
+        state = _apply_runtime_mismatch_guards(state)
         return state
 
     cfg = state.get("config") or {}
+    state["consistency"] = _build_consistency_report(state)
+    state = _apply_runtime_mismatch_guards(state)
+    if (state.get("runtime_guard") or {}).get("hasMismatch"):
+        state["last_update"] = _now_iso()
+        save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
+        return state
     state["fallback_mode"] = None
     market_type = cfg.get("market_type", "futures")
     symbol = cfg.get("symbol", "BTC/USDT:USDT")
