@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
-from backend.app.services.paper_service import get_paper_payload, start_paper, pause_paper, reset_paper, update_paper_config
+from backend.app.services.paper_service import get_paper_payload, start_paper, pause_paper, reset_paper, update_paper_config, get_paper_audit
 
 router = APIRouter()
 
@@ -37,3 +37,8 @@ def api_paper_reset():
 def api_paper_config(body: PaperStartRequest = None):
     cfg = body.model_dump(exclude_none=True) if body else {}
     return update_paper_config(cfg)
+
+
+@router.get('/api/paper/audit')
+def api_paper_audit():
+    return get_paper_audit()
