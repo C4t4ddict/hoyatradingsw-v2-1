@@ -45,6 +45,7 @@ def _persist_session_snapshot(state: Dict[str, Any]):
     if not session_id:
         return
     paths = _session_paths(session_id)
+    consistency = _build_consistency_report(state)
     payload = {
         "session_id": session_id,
         "started_at": state.get("started_at"),
@@ -56,6 +57,7 @@ def _persist_session_snapshot(state: Dict[str, Any]):
         "executed_position_mode": state.get("executed_position_mode"),
         "fallback_mode": state.get("fallback_mode"),
         "status": {"running": state.get("running"), "paused": state.get("paused")},
+        "consistency": consistency,
     }
     _ensure_parent(paths["session"])
     with open(paths["session"], "w", encoding="utf-8") as f:
@@ -148,6 +150,50 @@ def _release_lock(path: str = LOCK_PATH):
         pass
 
 
+def _build_consistency_report(state: Dict[str, Any]) -> Dict[str, Any]:
+    report = {"ok": True, "errors": [], "warnings": []}
+    metrics = state.get("metrics") or {}
+    result = state.get("result") or {}
+    config = state.get("config") or {}
+    snapshot = state.get("config_snapshot") or {}
+
+    def add_error(msg: str):
+        report["ok"] = False
+        report["errors"].append(msg)
+
+    if state.get("running") and not state.get("session_id"):
+        add_error("running session without session_id")
+
+    result_trades = result.get("trades") or []
+    metric_trades = int(metrics.get("trades") or 0)
+    total_trades = int(result.get("total_trades") or 0)
+    if metric_trades != total_trades:
+        add_error(f"metrics.trades({metric_trades}) != result.total_trades({total_trades})")
+    if total_trades != len(result_trades):
+        add_error(f"result.total_trades({total_trades}) != len(result.trades)({len(result_trades)})")
+
+    result_final = float(result.get("final_usdt") or metrics.get("virtual_balance") or 0.0)
+    metric_balance = float(metrics.get("virtual_balance") or 0.0)
+    if round(result_final, 8) != round(metric_balance, 8):
+        add_error(f"metrics.virtual_balance({metric_balance}) != result.final_usdt({result_final})")
+
+    result_initial = float(result.get("initial_usdt") or metrics.get("starting_balance") or config.get("initial_usdt") or 0.0)
+    metric_initial = float(metrics.get("starting_balance") or config.get("initial_usdt") or 0.0)
+    if round(result_initial, 8) != round(metric_initial, 8):
+        add_error(f"metrics.starting_balance({metric_initial}) != result.initial_usdt({result_initial})")
+
+    if snapshot:
+        for key in ["symbol", "leverage", "initial_usdt", "market_type", "mode"]:
+            if key in snapshot and key in config and snapshot.get(key) != config.get(key):
+                report["warnings"].append(f"config_snapshot.{key}({snapshot.get(key)}) != config.{key}({config.get(key)})")
+
+    seen_ids = state.get("seen_trade_ids") or []
+    if result_trades and len(seen_ids) and len(seen_ids) < len(result_trades):
+        report["warnings"].append("seen_trade_ids shorter than result trades")
+
+    return report
+
+
 def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": state.get("session_id"),
@@ -168,6 +214,7 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "seen_trade_ids": state.get("seen_trade_ids"),
         "sent_alert_trade_ids": state.get("sent_alert_trade_ids"),
         "config_snapshot": state.get("config_snapshot"),
+        "consistency": state.get("consistency"),
     }
 
 
@@ -418,6 +465,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         return load_state(path)
     state = load_state(path)
     if not state.get("running"):
+        state["consistency"] = _build_consistency_report(state)
         return state
 
     cfg = state.get("config") or {}
@@ -499,6 +547,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             result = state.get('result') or {}
             result['note'] = f"paper hold: {state.get('fallback_mode') or 'no_trade'}"
             state['result'] = result
+            state['consistency'] = _build_consistency_report(state)
             state['executed_strategy'] = 'hold'
             state['executed_timeframe'] = timeframe
             state['executed_position_mode'] = 'flat'
@@ -526,6 +575,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         result = state.get('result') or {}
         result['note'] = f"insufficient candles: {len(candles)} for {timeframe}"
         state['result'] = result
+        state['consistency'] = _build_consistency_report(state)
         state["last_update"] = _now_iso()
         save_state(state, path)
         _persist_session_snapshot(state)
@@ -594,6 +644,10 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     state["executed_position_mode"] = position_mode
     if cfg.get('mode') == 'ml_signal' and state.get('fallback_mode'):
         state['result']['note'] = f"neutral fallback active: {state.get('fallback_mode')}"
+    state['consistency'] = _build_consistency_report(state)
+    if not state['consistency'].get('ok'):
+        note = (state.get('result') or {}).get('note') or ''
+        state['result']['note'] = (f"{note} | consistency warning").strip(' |')
     save_state(state, path)
     _persist_session_snapshot(state)
     _release_lock()
