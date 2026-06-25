@@ -19,6 +19,7 @@ except Exception:
 
 STATE_PATH = os.getenv("PAPER_LIVE_STATE_PATH", "data/paper_live_state.json")
 PID_PATH = os.getenv("PAPER_LIVE_PID_PATH", "data/paper_live_worker.pid")
+LOCK_PATH = os.getenv("PAPER_LIVE_LOCK_PATH", "data/paper_live_worker.lock")
 
 SESSION_DIR = os.getenv("PAPER_LIVE_SESSION_DIR", "data/paper_sessions")
 
@@ -107,6 +108,72 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
+
+def _read_json(path: str, default: Dict[str, Any] = None) -> Dict[str, Any]:
+    if default is None:
+        default = {}
+    if not os.path.exists(path):
+        return dict(default)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else dict(default)
+    except Exception:
+        return dict(default)
+
+
+def _acquire_lock(path: str = LOCK_PATH) -> bool:
+    _ensure_parent(path)
+    pid = os.getpid()
+    now = _now_iso()
+    if os.path.exists(path):
+        current = _read_json(path, {})
+        lock_pid = int(current.get("pid") or 0)
+        if lock_pid and _is_pid_alive(lock_pid) and lock_pid != pid:
+            return False
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"pid": pid, "acquired_at": now}, f, ensure_ascii=False, indent=2)
+    return True
+
+
+def _release_lock(path: str = LOCK_PATH):
+    try:
+        if os.path.exists(path):
+            current = _read_json(path, {})
+            lock_pid = int(current.get("pid") or 0)
+            if lock_pid in [0, os.getpid()]:
+                os.remove(path)
+    except Exception:
+        pass
+
+
+def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "session_id": state.get("session_id"),
+        "running": state.get("running"),
+        "paused": state.get("paused"),
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "worker_pid": state.get("worker_pid"),
+        "config": state.get("config"),
+        "metrics": state.get("metrics"),
+        "result": state.get("result"),
+        "ml_signal": state.get("ml_signal"),
+        "executed_strategy": state.get("executed_strategy"),
+        "executed_timeframe": state.get("executed_timeframe"),
+        "executed_position_mode": state.get("executed_position_mode"),
+        "fallback_mode": state.get("fallback_mode"),
+        "alert_last_trade_count": state.get("alert_last_trade_count"),
+        "seen_trade_ids": state.get("seen_trade_ids"),
+        "sent_alert_trade_ids": state.get("sent_alert_trade_ids"),
+        "config_snapshot": state.get("config_snapshot"),
+    }
+
+
+def _sanitize_state_for_disk(state: Dict[str, Any]) -> Dict[str, Any]:
+    return _build_runtime_state(state)
+
 def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"running": False}
@@ -120,8 +187,9 @@ def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
 
 def save_state(state: Dict[str, Any], path: str = STATE_PATH):
     _ensure_parent(path)
+    disk_state = _sanitize_state_for_disk(state)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(disk_state, f, ensure_ascii=False, indent=2)
 
 
 def _read_pid(path: str = PID_PATH) -> int:
@@ -183,6 +251,7 @@ def stop_background_worker():
         except Exception:
             pass
     _clear_pid()
+    _release_lock()
 
 
 def start_session(config: Dict[str, Any], path: str = STATE_PATH):
@@ -228,6 +297,7 @@ def start_session(config: Dict[str, Any], path: str = STATE_PATH):
     state["worker_pid"] = pid
     save_state(state, path)
     _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -271,6 +341,7 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
     state["worker_pid"] = pid
     save_state(state, path)
     _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -284,6 +355,7 @@ def reset_session(path: str = STATE_PATH):
     state = {"running": False, "paused": False, "reset_at": _now_iso(), "metrics": {"virtual_balance": 0.0, "return_pct": 0.0, "trades": 0, "liquidations": 0}}
     save_state(state, path)
     _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -342,6 +414,8 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
 
 
 def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
+    if not _acquire_lock():
+        return load_state(path)
     state = load_state(path)
     if not state.get("running"):
         return state
@@ -430,6 +504,8 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             state['executed_position_mode'] = 'flat'
             state['last_update'] = _now_iso()
             save_state(state, path)
+            _persist_session_snapshot(state)
+            _release_lock()
             return state
 
     end_dt = datetime.now(timezone.utc)
@@ -452,6 +528,8 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         state['result'] = result
         state["last_update"] = _now_iso()
         save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
         return state
 
     funding_events = None
@@ -518,4 +596,5 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         state['result']['note'] = f"neutral fallback active: {state.get('fallback_mode')}"
     save_state(state, path)
     _persist_session_snapshot(state)
+    _release_lock()
     return state
