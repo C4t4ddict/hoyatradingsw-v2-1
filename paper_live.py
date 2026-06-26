@@ -567,7 +567,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         scores = ml_signal.get('scores') or {}
         state['ml_signal'] = ml_signal
 
-        recent_trades = ((state.get('result') or {}).get('trades') or [])[-3:]
+        recent_trades = ((state.get('result') or {}).get('trades') or [])[-4:]
         consecutive_losses = 0
         for trade in reversed(recent_trades):
             if float(trade.get('pnl', 0) or 0) < 0:
@@ -592,35 +592,35 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             if not no_trade:
                 state['fallback_mode'] = 'neutral_selector_strict'
 
-                short_agree = scores.get('down_5m', 0) > 0.53 and scores.get('down_15m', 0) > 0.52 and scores.get('intel_short_score', 0) >= scores.get('intel_long_score', 0)
-                long_agree = scores.get('up_5m', 0) > 0.53 and scores.get('up_15m', 0) > 0.52 and scores.get('intel_long_score', 0) >= scores.get('intel_short_score', 0)
+                short_agree = scores.get('down_5m', 0) > 0.57 and scores.get('down_15m', 0) > 0.55 and scores.get('intel_short_score', 0) >= scores.get('intel_long_score', 0) + 1.2
+                long_agree = scores.get('up_5m', 0) > 0.57 and scores.get('up_15m', 0) > 0.55 and scores.get('intel_long_score', 0) >= scores.get('intel_short_score', 0) + 1.2
                 reversion_agree = (
-                    abs((scores.get('intel_long_score', 0) - scores.get('intel_short_score', 0))) < 1.2 and
-                    max(scores.get('up_5m', 0), scores.get('down_5m', 0), scores.get('up_15m', 0), scores.get('down_15m', 0)) < 0.58
+                    abs((scores.get('intel_long_score', 0) - scores.get('intel_short_score', 0))) < 0.7 and
+                    max(scores.get('up_5m', 0), scores.get('down_5m', 0), scores.get('up_15m', 0), scores.get('down_15m', 0)) < 0.54
                 )
 
                 if short_agree:
                     strategy = 'breakout_20'
                     position_mode = 'short'
                     timeframe = '15m'
-                    cfg['sl_pct'] = 0.22
-                    cfg['tp_rr'] = 2.8
+                    cfg['sl_pct'] = 0.18
+                    cfg['tp_rr'] = 3.0
                 elif long_agree:
                     strategy = 'trend_continuation_system'
                     position_mode = 'long'
                     timeframe = '15m'
-                    cfg['sl_pct'] = 0.22
-                    cfg['tp_rr'] = 2.8
+                    cfg['sl_pct'] = 0.18
+                    cfg['tp_rr'] = 3.0
                 elif reversion_agree:
                     strategy = 'rsi_reversion'
                     position_mode = 'long'
                     timeframe = '15m'
                     cfg['rsi_lower'] = 42
                     cfg['rsi_upper'] = 58
-                    cfg['sl_pct'] = 0.18
-                    cfg['tp_rr'] = 2.4
+                    cfg['sl_pct'] = 0.14
+                    cfg['tp_rr'] = 2.6
                 else:
-                    state['fallback_mode'] = 'neutral_wait'
+                    state['fallback_mode'] = 'neutral_wait_strict'
                     no_trade = True
 
         if no_trade:
