@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 import joblib
@@ -13,6 +14,8 @@ TARGETS = [
     "label_up_4h", "label_down_4h",
     "label_up_24h", "label_down_24h",
 ]
+_MODEL_CACHE: dict[Path, tuple[int, dict]] = {}
+_MODEL_CACHE_LOCK = threading.RLock()
 
 
 def _json_scalar(value):
@@ -43,12 +46,33 @@ def positive_probability(result: dict) -> float:
     return float(probabilities[positive_index]) if positive_index is not None else 0.0
 
 
+def clear_model_cache(model_path: Path | None = None) -> None:
+    """Invalidate all cached bundles or the bundle at one model path."""
+    with _MODEL_CACHE_LOCK:
+        if model_path is None:
+            _MODEL_CACHE.clear()
+        else:
+            _MODEL_CACHE.pop(model_path.resolve(), None)
+
+
+def _load_model_bundle(model_path: Path) -> dict:
+    cache_key = model_path.resolve()
+    modified_ns = model_path.stat().st_mtime_ns
+    with _MODEL_CACHE_LOCK:
+        cached = _MODEL_CACHE.get(cache_key)
+        if cached and cached[0] == modified_ns:
+            return cached[1]
+        bundle = joblib.load(model_path)
+        _MODEL_CACHE[cache_key] = (modified_ns, bundle)
+        return bundle
+
+
 def _predict_one(event: dict, target_col: str):
     model_path = MODEL_DIR / f"{target_col}.joblib"
     if not model_path.exists():
         return {"ok": False, "reason": "model not found"}
 
-    bundle = joblib.load(model_path)
+    bundle = _load_model_bundle(model_path)
     prep = bundle["prep"]
     model = bundle["model"]
     row = {

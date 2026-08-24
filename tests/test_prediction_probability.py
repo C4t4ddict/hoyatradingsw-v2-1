@@ -37,6 +37,7 @@ class ReversedClassModel:
 
 class PredictionProbabilityTests(unittest.TestCase):
     def test_bidirectional_single_class_probability_for_all_targets(self):
+        predict_model_bidirectional.clear_model_cache()
         event = {"title": "test", "summary": "event"}
         for target in predict_model_bidirectional.TARGETS:
             for label, expected in ((0, 0.0), (1, 1.0)):
@@ -52,6 +53,22 @@ class PredictionProbabilityTests(unittest.TestCase):
                 self.assertEqual(result["classes"], [label])
                 self.assertEqual(result["positive_proba"], expected)
                 self.assertEqual(predict_model_bidirectional.positive_probability(result), expected)
+
+    def test_bidirectional_model_cache_can_be_invalidated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory) / "label_up_5m.joblib"
+            model_path.touch()
+            bundle = {"prep": IdentityPreprocessor(), "model": SingleClassModel(1)}
+            predict_model_bidirectional.clear_model_cache()
+            with patch.object(predict_model_bidirectional.joblib, "load", return_value=bundle) as load:
+                first = predict_model_bidirectional._load_model_bundle(model_path)
+                second = predict_model_bidirectional._load_model_bundle(model_path)
+                self.assertIs(first, second)
+                self.assertEqual(load.call_count, 1)
+
+                predict_model_bidirectional.clear_model_cache(model_path)
+                predict_model_bidirectional._load_model_bundle(model_path)
+                self.assertEqual(load.call_count, 2)
 
     def test_positive_probability_uses_class_label_not_list_position(self):
         probabilities, classes, positive = predict_model_bidirectional._probability_payload(
