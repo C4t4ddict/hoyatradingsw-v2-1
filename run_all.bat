@@ -16,8 +16,8 @@ if not exist .env (
 echo [setup] installing requirements
 pip install -r requirements.txt
 
-echo [run] starting API server on :8000
-start "HoyaTradingSW-API" cmd /k "call .venv\Scripts\activate && python main.py"
+echo [run] starting API server on :8010
+start "HoyaTradingSW-API" cmd /k "call .venv\Scripts\activate && python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8010"
 
 timeout /t 2 >nul
 

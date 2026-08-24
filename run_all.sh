@@ -18,13 +18,16 @@ fi
 echo "[setup] installing requirements"
 pip install -r requirements.txt
 
-echo "[run] starting API server on :8000"
-python main.py > /tmp/hoyatradingsw_server.log 2>&1 &
+echo "[run] starting API server on :8010"
+SERVER_LOG="$(mktemp "${TMPDIR:-/tmp}/hoyatradingsw_server.XXXXXX")"
+echo "[run] API log: $SERVER_LOG"
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8010 >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 cleanup() {
   echo "[stop] stopping server (pid=$SERVER_PID)"
   kill "$SERVER_PID" 2>/dev/null || true
+  rm -f -- "$SERVER_LOG"
 }
 trap cleanup EXIT
 
