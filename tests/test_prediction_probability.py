@@ -92,6 +92,23 @@ class PredictionProbabilityTests(unittest.TestCase):
             0.75,
         )
 
+    def test_primary_predictor_emits_single_class_positive_probability(self):
+        event = {"title": "test", "summary": "event"}
+        for label, expected in ((0, 0.0), (1, 1.0)):
+            bundle = {
+                "prep": IdentityPreprocessor(),
+                "model": SingleClassModel(label),
+                "_model_family": "test",
+                "_model_path": "test.joblib",
+            }
+            with self.subTest(label=label), patch.object(
+                predict_model, "_load_bundle", return_value=bundle
+            ):
+                result = predict_model._predict_one(event, "label_up_1h")
+            self.assertEqual(result["classes"], [label])
+            self.assertEqual(result["positive_proba"], expected)
+            self.assertEqual(predict_model.positive_probability(result), expected)
+
 
 if __name__ == "__main__":
     unittest.main()
