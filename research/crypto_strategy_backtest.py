@@ -211,6 +211,11 @@ STRATEGIES = [
 ]
 
 
+def current_signal(frame: pd.DataFrame, spec: StrategySpec) -> float:
+    signal = spec.signal(frame).clip(-1.0, 1.0)
+    return float(signal.iloc[-1]) if not signal.empty else 0.0
+
+
 def _funding_by_bar(funding: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series:
     if funding.empty:
         return pd.Series(0.0, index=index)
@@ -392,7 +397,8 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
     for asset, symbol in SYMBOLS.items():
         frame = fetch_ohlcv(asset, symbol, refresh=refresh)
         funding = fetch_funding(asset, symbol, refresh=refresh)
-        source_rows.append({"asset": asset, "ohlcv_rows": len(frame), "funding_rows": len(funding), "start": frame.index.min().isoformat(), "end": frame.index.max().isoformat(), "duplicate_timestamps": int(frame.index.duplicated().sum()), "null_cells": int(frame.isna().sum().sum())})
+        expected_index = pd.date_range(frame.index.min(), frame.index.max(), freq=TIMEFRAME)
+        source_rows.append({"asset": asset, "ohlcv_rows": len(frame), "funding_rows": len(funding), "start": frame.index.min().isoformat(), "end": frame.index.max().isoformat(), "duplicate_timestamps": int(frame.index.duplicated().sum()), "missing_intervals": len(expected_index.difference(frame.index)), "null_cells": int(frame.isna().sum().sum())})
         snapshot_rows.append(_market_snapshot(asset, frame, funding))
 
         for spec in STRATEGIES:
@@ -430,9 +436,11 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
         portfolio_rows.append(row)
     portfolio_summary = pd.DataFrame(portfolio_rows).sort_values("sharpe", ascending=False)
     exposure_rows = []
+    strategy_by_name = {spec.name: spec for spec in STRATEGIES}
     for name, (strategy, weights) in portfolio_definitions.items():
         for asset, weight in weights.items():
-            current_position = float(results[(asset, strategy)]["position"].iloc[-1])
+            frame = fetch_ohlcv(asset, SYMBOLS[asset])
+            current_position = current_signal(frame, strategy_by_name[strategy])
             exposure_rows.append({"portfolio": name, "asset": asset, "base_weight": weight, "signal_position": current_position, "current_net_exposure": weight * current_position})
     portfolio_exposure = pd.DataFrame(exposure_rows)
     scenario_rows = []
@@ -450,7 +458,7 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
             )
             result = backtest(frame, funding, spec)
             pieces.append(result[["position", "turnover", "gross_return", "cost", "funding", "net_return"]] * quality_weights[asset])
-            current_exposure += float(result["position"].iloc[-1]) * quality_weights[asset]
+            current_exposure += current_signal(frame, spec) * quality_weights[asset]
         portfolio = sum(pieces[1:], pieces[0])
         portfolio["equity"] = (1 + portfolio["net_return"]).cumprod()
         scenario_rows.append({
