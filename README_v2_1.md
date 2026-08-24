@@ -11,7 +11,7 @@
 ### 요구 환경
 
 - Python 3.12 권장
-- Node.js 20 이상
+- Node.js 20.9.0 이상
 - 실계좌 키 없이 확인할 때 `.env.example`의 `DRY_RUN=true`, `BINANCE_TESTNET=true` 유지
 
 ### backend
