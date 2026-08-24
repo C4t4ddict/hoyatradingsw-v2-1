@@ -1,5 +1,5 @@
 {
-  "as_of_utc": "2026-08-24T22:40:41.717423+00:00",
+  "as_of_utc": "2026-08-24T23:13:44.210077+00:00",
   "execution": "signal at close; position begins next bar open",
   "price_interval": "4h",
   "warmup_start": "2021-08-01 UTC",

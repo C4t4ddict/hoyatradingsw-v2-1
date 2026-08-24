@@ -289,6 +289,12 @@ def _period_return(result: pd.DataFrame, start: str, end: str | None = None) -> 
     return ((1 + subset).prod() - 1) * 100 if len(subset) else np.nan
 
 
+def _training_sharpe(result: pd.DataFrame) -> float:
+    """Return Sharpe using only the 2021-08 through 2023 selection window."""
+    training = result.loc["2021-08-01":"2023-12-31"]
+    return metrics(training)["sharpe"] if not training.empty else np.nan
+
+
 def _missing_interval_count(frame: pd.DataFrame) -> int:
     if frame.empty:
         return 0
@@ -487,6 +493,7 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
         scenario_rows.append({
             "target_vol_pct": target_vol * 100,
             **metrics(portfolio),
+            "selection_sharpe_2021_2023": _training_sharpe(portfolio),
             "return_2024_current_pct": _period_return(portfolio, "2024-01-01"),
             "return_2025_current_pct": _period_return(portfolio, "2025-01-01"),
             "current_net_exposure_pct": current_exposure * 100,

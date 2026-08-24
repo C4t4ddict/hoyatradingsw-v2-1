@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from research.crypto_strategy_backtest import StrategySpec, _combine_components, backtest, current_signal
+from research.crypto_strategy_backtest import StrategySpec, _combine_components, _training_sharpe, backtest, current_signal
 
 
 def _frame(opens):
@@ -74,6 +74,26 @@ class CryptoStrategyBacktestTests(unittest.TestCase):
         self.assertFalse(combined.isna().any().any())
         self.assertEqual(combined["net_return"].tolist(), [0.1, 0.2])
         self.assertAlmostEqual(combined["equity"].iloc[-1], 1.32)
+
+    def test_risk_target_selection_sharpe_excludes_holdout(self):
+        training_index = pd.date_range("2023-12-30", periods=8, freq="4h", tz="UTC")
+        training_returns = pd.Series([0.01, -0.005] * 4, index=training_index)
+        training = pd.DataFrame(
+            {
+                "net_return": training_returns,
+                "equity": (1 + training_returns).cumprod(),
+                "turnover": 0.0,
+                "funding": 0.0,
+                "cost": 0.0,
+            }
+        )
+        holdout = training.copy()
+        holdout.index = pd.date_range("2024-01-01", periods=8, freq="4h", tz="UTC")
+        holdout["net_return"] = 0.5
+        combined = pd.concat([training, holdout])
+        combined["equity"] = (1 + combined["net_return"]).cumprod()
+
+        self.assertAlmostEqual(_training_sharpe(training), _training_sharpe(combined))
 
 
 if __name__ == "__main__":

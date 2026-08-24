@@ -76,7 +76,7 @@ display(Markdown('### Portfolio comparison'))
 cols = ['portfolio','cagr_pct','sharpe','sortino','max_drawdown_pct','return_2024_current_pct','return_2025_current_pct']
 display(study['portfolio_summary'][cols].round(2))
 display(Markdown('### Risk-target choices for BTC/ETH/SOL 60/30/10'))
-cols = ['target_vol_pct','cagr_pct','sharpe','max_drawdown_pct','return_2024_current_pct','return_2025_current_pct','current_net_exposure_pct']
+cols = ['target_vol_pct','selection_sharpe_2021_2023','cagr_pct','sharpe','max_drawdown_pct','return_2024_current_pct','return_2025_current_pct','current_net_exposure_pct']
 display(study['risk_scenarios'][cols].round(2))
 """
         ),
@@ -138,12 +138,12 @@ The independent harness avoids same-bar close execution, includes turnover costs
         nbf.v4.new_markdown_cell("## Takeaways"),
         nbf.v4.new_code_cell(
             """as_of = study['snapshot']['as_of_utc'].min()
-conservative = study['risk_scenarios'].query('target_vol_pct <= 25').sort_values('sharpe', ascending=False).iloc[0]
+conservative = study['risk_scenarios'].query('target_vol_pct <= 25').sort_values('selection_sharpe_2021_2023', ascending=False).iloc[0]
 futures = study['aggregate'][study['aggregate']['strategy'].str.contains('long_short')]
 rsi = study['aggregate'].query("strategy == 'rsi_pullback_long_cash'").iloc[0]
 display(Markdown(f'''Results below are observations from the committed study run through **{as_of}** and will change after a data refresh.
 
-1. **Paper-trading candidate:** long/cash 90-day momentum + 200-day trend filter, BTC/ETH/SOL 60/30/10, no leverage. Among the conservative 20% and 25% target rows, this run's higher-Sharpe choice is **{conservative.target_vol_pct:.0f}%**, with CAGR **{conservative.cagr_pct:.1f}%**, Sharpe **{conservative.sharpe:.2f}**, and max drawdown **{conservative.max_drawdown_pct:.1f}%**.
+1. **Paper-trading candidate:** long/cash 90-day momentum + 200-day trend filter, BTC/ETH/SOL 60/30/10, no leverage. Among the conservative 20% and 25% rows, the 2021–2023 training-only Sharpe selects **{conservative.target_vol_pct:.0f}%** (training Sharpe **{conservative.selection_sharpe_2021_2023:.2f}**). Its untouched 2024-current holdout return is **{conservative.return_2024_current_pct:.1f}%**; full-sample CAGR **{conservative.cagr_pct:.1f}%** and max drawdown **{conservative.max_drawdown_pct:.1f}%** are descriptive, not selection inputs.
 2. **Benchmark:** retain the 50/200-day long/cash trend and compare its asset-level results in the generated tables.
 3. **Unrestricted futures variants:** do not promote while their generated worst drawdowns remain between **{futures.worst_max_drawdown_pct.min():.1f}%** and **{futures.worst_max_drawdown_pct.max():.1f}%**.
 4. **RSI pullback:** this corrected bar-native RSI(14) control produced an estimated median **{rsi.median_round_trips:.1f}** round trips; judge it from the regenerated holdout and cost tables rather than a fixed narrative.
