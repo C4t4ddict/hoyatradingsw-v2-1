@@ -26,7 +26,7 @@ def build_notebook():
 
 - Source: Binance USD-M public 4-hour OHLCV and funding history for BTC, ETH, and SOL. Exact coverage and freshness are reported in the generated source-quality table below.
 - The most consistent candidate is **long/cash momentum with volatility targeting**. It materially reduces drawdown versus buy-and-hold in this sample while retaining positive risk-adjusted returns.
-- The paper-trading candidate uses BTC/ETH/SOL base weights of 60/30/10, no leverage, and a conservative 20%–25% volatility target.
+- The paper-trading candidate uses BTC/ETH/SOL base weights of 60/30/10 and no leverage. The 20% and 25% rows are conservative candidate settings, not timeless performance claims; compare them in the generated risk-target table for this run.
 - Current regime and exposure must be read from the generated market snapshot and risk-target table; they change whenever the data cache is refreshed.
 - Do not deploy the repository's current `ensemble_regime` to live capital yet: its regime slicing creates discontinuous synthetic candles, entries use the signal bar's close, and funding direction is wrong for shorts.
 """
@@ -135,14 +135,20 @@ The independent harness avoids same-bar close execution, includes turnover costs
 - Account-level fee tier, taxes, delisting, and exchange/API outage behavior are not included.
 """
         ),
-        nbf.v4.new_markdown_cell(
-            """## Takeaways
+        nbf.v4.new_markdown_cell("## Takeaways"),
+        nbf.v4.new_code_cell(
+            """as_of = study['snapshot']['as_of_utc'].min()
+conservative = study['risk_scenarios'].query('target_vol_pct <= 25').sort_values('sharpe', ascending=False).iloc[0]
+futures = study['aggregate'][study['aggregate']['strategy'].str.contains('long_short')]
+rsi = study['aggregate'].query("strategy == 'rsi_pullback_long_cash'").iloc[0]
+display(Markdown(f'''Results below are observations from the committed study run through **{as_of}** and will change after a data refresh.
 
-1. **Adopt for paper trading:** long/cash 90-day momentum + 200-day trend filter + 20%–25% volatility target, using BTC/ETH/SOL base weights of 60/30/10 and no leverage.
-2. **Keep as benchmark:** 50/200-day long/cash trend. It performed well on BTC but was inconsistent on ETH and SOL and allowed materially deeper drawdowns.
-3. **Reject for now:** unrestricted long/short EMA and Donchian futures variants. Cross-asset holdout losses and 79%–91% worst drawdowns are unacceptable for unattended automation.
-4. **Reject as inactive:** the tested RSI pullback rule produced no trades, so it provides no evidence of usefulness.
-5. **Current regime:** allow partial long exposure, but do not treat the rebound as a confirmed structural bull market until the 50-day trend catches the 200-day trend. Positive funding also favors spot-style exposure over paying perpetual funding for an aggressive long.
+1. **Paper-trading candidate:** long/cash 90-day momentum + 200-day trend filter, BTC/ETH/SOL 60/30/10, no leverage. Among the conservative 20% and 25% target rows, this run's higher-Sharpe choice is **{conservative.target_vol_pct:.0f}%**, with CAGR **{conservative.cagr_pct:.1f}%**, Sharpe **{conservative.sharpe:.2f}**, and max drawdown **{conservative.max_drawdown_pct:.1f}%**.
+2. **Benchmark:** retain the 50/200-day long/cash trend and compare its asset-level results in the generated tables.
+3. **Unrestricted futures variants:** do not promote while their generated worst drawdowns remain between **{futures.worst_max_drawdown_pct.min():.1f}%** and **{futures.worst_max_drawdown_pct.max():.1f}%**.
+4. **RSI pullback:** this corrected bar-native RSI(14) control produced an estimated median **{rsi.median_round_trips:.1f}** round trips; judge it from the regenerated holdout and cost tables rather than a fixed narrative.
+5. **Current exposure:** use the generated market snapshot and risk-target table above; no static regime statement is treated as current after refresh.
+'''))
 """
         ),
     ]

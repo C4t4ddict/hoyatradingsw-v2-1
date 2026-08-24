@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from research.crypto_strategy_backtest import StrategySpec, backtest, current_signal
+from research.crypto_strategy_backtest import StrategySpec, _combine_components, backtest, current_signal
 
 
 def _frame(opens):
@@ -18,6 +18,11 @@ def _frame(opens):
         },
         index=index,
     )
+
+
+def _gapped_frame(opens, drop_positions):
+    frame = _frame(opens)
+    return frame.drop(frame.index[list(drop_positions)])
 
 
 class CryptoStrategyBacktestTests(unittest.TestCase):
@@ -50,6 +55,25 @@ class CryptoStrategyBacktestTests(unittest.TestCase):
         spec = StrategySpec("latest", "spot", lambda data: signal)
 
         self.assertEqual(current_signal(frame, spec), 0.7)
+
+    def test_gapped_price_series_is_rejected(self):
+        frame = _gapped_frame([100, 101, 102, 103, 104], [2])
+        signal = pd.Series(1.0, index=frame.index)
+        spec = StrategySpec("gapped", "spot", lambda data: signal)
+
+        with self.assertRaisesRegex(ValueError, "missing 4h interval"):
+            backtest(frame, pd.DataFrame(), spec, cost_override=0.0)
+
+    def test_portfolio_components_align_missing_asset_rows_as_zero(self):
+        columns = ["position", "turnover", "gross_return", "cost", "funding", "net_return"]
+        first = pd.DataFrame([[1, 0, 0.1, 0, 0, 0.1]], index=[pd.Timestamp("2022-01-01", tz="UTC")], columns=columns)
+        second = pd.DataFrame([[1, 0, 0.2, 0, 0, 0.2]], index=[pd.Timestamp("2022-01-01 04:00", tz="UTC")], columns=columns)
+
+        combined = _combine_components([first, second])
+
+        self.assertFalse(combined.isna().any().any())
+        self.assertEqual(combined["net_return"].tolist(), [0.1, 0.2])
+        self.assertAlmostEqual(combined["equity"].iloc[-1], 1.32)
 
 
 if __name__ == "__main__":

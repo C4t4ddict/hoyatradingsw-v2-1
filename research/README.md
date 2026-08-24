@@ -26,6 +26,14 @@ From the repository root:
 .\.venv\Scripts\python.exe research\build_crypto_strategy_notebook.py
 ```
 
+On macOS or Linux:
+
+```bash
+./.venv/bin/python -m pip install -r research/requirements.txt
+./.venv/bin/python research/crypto_strategy_backtest.py
+./.venv/bin/python research/build_crypto_strategy_notebook.py
+```
+
 The first run downloads public market data and can take several minutes. Later
 runs use the local cache unless `run_study(refresh=True)` is requested.
 

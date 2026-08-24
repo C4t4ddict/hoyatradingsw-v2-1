@@ -4,7 +4,7 @@ pydantic==2.11.7
 python-dotenv==1.1.1
 ccxt==4.5.4
 PyYAML==6.0.2
-streamlit==1.48.1
+streamlit==1.62.0
 pandas==2.3.1
 plotly==6.2.0
 feedparser==6.0.11

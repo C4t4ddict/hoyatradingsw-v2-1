@@ -33,6 +33,7 @@ SYMBOLS = {
     "ETH": "ETH/USDT:USDT",
     "SOL": "SOL/USDT:USDT",
 }
+COMPONENT_COLUMNS = ["position", "turnover", "gross_return", "cost", "funding", "net_return"]
 
 
 @dataclass(frozen=True)
@@ -181,7 +182,9 @@ def signal_donchian_long_short(frame: pd.DataFrame) -> pd.Series:
 
 def signal_rsi_pullback_long_cash(frame: pd.DataFrame) -> pd.Series:
     slow = frame["close"].ewm(span=200 * BARS_PER_DAY, adjust=False).mean()
-    rsi = _rsi(frame["close"], 14 * BARS_PER_DAY)
+    # Classic RSI(14) thresholds are calibrated in bars, so retain a 14-bar
+    # oscillator even though the slower trend filter is day-equivalent.
+    rsi = _rsi(frame["close"], 14)
     long_entry = (frame["close"] > slow) & (rsi < 35)
     long_exit = (rsi > 55) | (frame["close"] < slow)
     zeros = pd.Series(False, index=frame.index)
@@ -224,6 +227,11 @@ def _funding_by_bar(funding: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series
 
 
 def backtest(frame: pd.DataFrame, funding: pd.DataFrame, spec: StrategySpec, cost_override: float | None = None) -> pd.DataFrame:
+    missing_intervals = _missing_interval_count(frame)
+    if missing_intervals:
+        raise ValueError(
+            f"{missing_intervals} missing {TIMEFRAME} interval(s); refusing to annualize a gapped series"
+        )
     raw_signal = spec.signal(frame).clip(-1.0, 1.0)
     position = raw_signal.shift(1).fillna(0.0)
     open_to_open = frame["open"].shift(-1) / frame["open"] - 1.0
@@ -281,15 +289,31 @@ def _period_return(result: pd.DataFrame, start: str, end: str | None = None) -> 
     return ((1 + subset).prod() - 1) * 100 if len(subset) else np.nan
 
 
+def _missing_interval_count(frame: pd.DataFrame) -> int:
+    if frame.empty:
+        return 0
+    expected_index = pd.date_range(frame.index.min(), frame.index.max(), freq=TIMEFRAME)
+    return len(expected_index.difference(frame.index))
+
+
+def _combine_components(pieces: list[pd.DataFrame]) -> pd.DataFrame:
+    if not pieces:
+        return pd.DataFrame(columns=[*COMPONENT_COLUMNS, "equity"])
+    combined = pieces[0].reindex(columns=COMPONENT_COLUMNS).copy()
+    for piece in pieces[1:]:
+        combined = combined.add(piece.reindex(columns=COMPONENT_COLUMNS), fill_value=0.0)
+    combined = combined.fillna(0.0).sort_index()
+    combined["equity"] = (1 + combined["net_return"]).cumprod()
+    return combined
+
+
 def _portfolio_result(results: dict[tuple[str, str], pd.DataFrame], strategy: str, weights: dict[str, float]) -> pd.DataFrame:
     pieces = []
     for asset, weight in weights.items():
-        part = results[(asset, strategy)][["position", "turnover", "gross_return", "cost", "funding", "net_return"]].copy()
+        part = results[(asset, strategy)][COMPONENT_COLUMNS].copy()
         part = part * float(weight)
         pieces.append(part)
-    combined = sum(pieces[1:], pieces[0])
-    combined["equity"] = (1 + combined["net_return"].fillna(0.0)).cumprod()
-    return combined
+    return _combine_components(pieces)
 
 
 def _market_snapshot(asset: str, frame: pd.DataFrame, funding: pd.DataFrame) -> dict:
@@ -298,7 +322,7 @@ def _market_snapshot(asset: str, frame: pd.DataFrame, funding: pd.DataFrame) -> 
     ema200 = close.ewm(span=200 * BARS_PER_DAY, adjust=False).mean()
     rv30 = np.log(close).diff().tail(30 * BARS_PER_DAY).std(ddof=0) * math.sqrt(BARS_PER_YEAR)
     recent_funding = (
-        funding.loc[funding.index >= funding.index.max() - pd.Timedelta("7D"), "funding_rate"]
+        funding.loc[funding.index >= funding.index.max() - pd.Timedelta(days=7), "funding_rate"]
         if not funding.empty
         else pd.Series(dtype=float)
     )
@@ -393,12 +417,13 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
     snapshot_rows: list[dict] = []
     results: dict[tuple[str, str], pd.DataFrame] = {}
     source_rows: list[dict] = []
+    market_data: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
 
     for asset, symbol in SYMBOLS.items():
         frame = fetch_ohlcv(asset, symbol, refresh=refresh)
         funding = fetch_funding(asset, symbol, refresh=refresh)
-        expected_index = pd.date_range(frame.index.min(), frame.index.max(), freq=TIMEFRAME)
-        source_rows.append({"asset": asset, "ohlcv_rows": len(frame), "funding_rows": len(funding), "start": frame.index.min().isoformat(), "end": frame.index.max().isoformat(), "duplicate_timestamps": int(frame.index.duplicated().sum()), "missing_intervals": len(expected_index.difference(frame.index)), "null_cells": int(frame.isna().sum().sum())})
+        market_data[asset] = (frame, funding)
+        source_rows.append({"asset": asset, "ohlcv_rows": len(frame), "funding_rows": len(funding), "start": frame.index.min().isoformat(), "end": frame.index.max().isoformat(), "duplicate_timestamps": int(frame.index.duplicated().sum()), "missing_intervals": _missing_interval_count(frame), "null_cells": int(frame.isna().sum().sum())})
         snapshot_rows.append(_market_snapshot(asset, frame, funding))
 
         for spec in STRATEGIES:
@@ -439,7 +464,7 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
     strategy_by_name = {spec.name: spec for spec in STRATEGIES}
     for name, (strategy, weights) in portfolio_definitions.items():
         for asset, weight in weights.items():
-            frame = fetch_ohlcv(asset, SYMBOLS[asset])
+            frame, _ = market_data[asset]
             current_position = current_signal(frame, strategy_by_name[strategy])
             exposure_rows.append({"portfolio": name, "asset": asset, "base_weight": weight, "signal_position": current_position, "current_net_exposure": weight * current_position})
     portfolio_exposure = pd.DataFrame(exposure_rows)
@@ -448,19 +473,17 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
     for target_vol in [0.20, 0.25, 0.35, 0.45]:
         pieces = []
         current_exposure = 0.0
-        for asset, symbol in SYMBOLS.items():
-            frame = fetch_ohlcv(asset, symbol)
-            funding = fetch_funding(asset, symbol)
+        for asset in SYMBOLS:
+            frame, funding = market_data[asset]
             spec = StrategySpec(
                 "risk_target_scenario",
                 "spot",
                 lambda data, target_vol=target_vol: signal_vol_target_params(data, 90, 200, target_vol),
             )
             result = backtest(frame, funding, spec)
-            pieces.append(result[["position", "turnover", "gross_return", "cost", "funding", "net_return"]] * quality_weights[asset])
+            pieces.append(result[COMPONENT_COLUMNS] * quality_weights[asset])
             current_exposure += current_signal(frame, spec) * quality_weights[asset]
-        portfolio = sum(pieces[1:], pieces[0])
-        portfolio["equity"] = (1 + portfolio["net_return"]).cumprod()
+        portfolio = _combine_components(pieces)
         scenario_rows.append({
             "target_vol_pct": target_vol * 100,
             **metrics(portfolio),
@@ -471,9 +494,8 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
     risk_scenarios = pd.DataFrame(scenario_rows)
 
     robustness_rows = []
-    for asset, symbol in SYMBOLS.items():
-        frame = fetch_ohlcv(asset, symbol)
-        funding = fetch_funding(asset, symbol)
+    for asset in SYMBOLS:
+        frame, funding = market_data[asset]
         for fast_days in [30, 50, 80]:
             for slow_days in [150, 200, 250]:
                 if fast_days >= slow_days:
@@ -518,8 +540,7 @@ def run_study(refresh: bool = False) -> dict[str, pd.DataFrame]:
         selected_rows.append(chosen.to_dict())
     walk_forward = pd.DataFrame(selected_rows)
 
-    btc_frame = fetch_ohlcv("BTC", SYMBOLS["BTC"])
-    btc_funding = fetch_funding("BTC", SYMBOLS["BTC"])
+    btc_frame, btc_funding = market_data["BTC"]
     sensitivity_rows = []
     for spec in STRATEGIES:
         for cost in [0.0004, 0.0008, 0.0013, 0.0020]:
