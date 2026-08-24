@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,6 +35,7 @@ jobs:
           fi
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall backend
+      - run: bash -n run_all.sh
       - name: Compile root Python modules
         shell: bash
         run: find . -maxdepth 1 -type f -name '*.py' -print0 | xargs -0 -r python -m py_compile
@@ -46,6 +49,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
