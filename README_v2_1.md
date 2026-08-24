@@ -7,18 +7,33 @@
 - API: `backend/` FastAPI
 
 ## 실행
+
+### 요구 환경
+
+- Python 3.12 권장
+- Node.js 20 이상
+- 실계좌 키 없이 확인할 때 `.env.example`의 `DRY_RUN=true`, `BINANCE_TESTNET=true` 유지
+
 ### backend
 ```bash
-cd /Users/brian/.openclaw/workspace/hoyatradingsw-v2-1
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+copy .env.example .env  # Windows. macOS/Linux는 cp 사용
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8010
 ```
 
 ### frontend
 ```bash
-cd /Users/brian/.openclaw/workspace/hoyatradingsw-v2-1/frontend
+cd frontend
 npm install
 npm run dev
 ```
+
+- 프론트엔드: http://127.0.0.1:3001
+- 백엔드 상태: http://127.0.0.1:8010/healthz
+- Windows 일괄 실행: `restart_and_run.bat`
 
 ## 현재 주요 API
 ### 공통
