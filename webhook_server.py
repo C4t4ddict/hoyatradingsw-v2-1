@@ -31,7 +31,7 @@ from strategy_store import (
 )
 from market_intel import get_market_brief, fetch_items
 from ml_dataset import append_events, load_events, enrich_with_price_labels
-from predict_model import predict_event
+from predict_model import positive_probability, predict_event
 
 load_dotenv()
 
@@ -721,11 +721,11 @@ def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None
         p4 = ml_pred.get("label_up_4h", {})
         p24 = ml_pred.get("label_up_24h", {})
 
-        up5 = float((p5.get("proba") or [0.0, 0.0])[1] if p5.get("ok") and len(p5.get("proba") or []) > 1 else 0.0)
-        up15 = float((p15.get("proba") or [0.0, 0.0])[1] if p15.get("ok") and len(p15.get("proba") or []) > 1 else 0.0)
-        up1 = float((p1.get("proba") or [0.0, 0.0])[1] if p1.get("ok") and len(p1.get("proba") or []) > 1 else 0.0)
-        up4 = float((p4.get("proba") or [0.0, 0.0])[1] if p4.get("ok") and len(p4.get("proba") or []) > 1 else 0.0)
-        up24 = float((p24.get("proba") or [0.0, 0.0])[1] if p24.get("ok") and len(p24.get("proba") or []) > 1 else 0.0)
+        up5 = positive_probability(p5)
+        up15 = positive_probability(p15)
+        up1 = positive_probability(p1)
+        up4 = positive_probability(p4)
+        up24 = positive_probability(p24)
 
         total_w = max(0.0001, ML_WEIGHT_1H + ML_WEIGHT_4H + ML_WEIGHT_24H)
         ml_composite = ((up1 * ML_WEIGHT_1H) + (up4 * ML_WEIGHT_4H) + (up24 * ML_WEIGHT_24H)) / total_w

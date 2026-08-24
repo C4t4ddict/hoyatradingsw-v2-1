@@ -66,12 +66,25 @@ PR 본문은 `.github/pull_request_template.md`를 사용해 변경 내용, 검�
 
 ## 변경 전후 검증
 
+PowerShell 첫 번째 터미널에서 컴파일과 서버 실행을 확인합니다.
+
 ```powershell
-.\.venv\Scripts\python.exe -m compileall backend *.py
+.\.venv\Scripts\python.exe -m compileall backend
+Get-ChildItem -LiteralPath . -Filter '*.py' -File | ForEach-Object {
+  & .\.venv\Scripts\python.exe -m py_compile $_.FullName
+}
 .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8010
-Invoke-RestMethod http://127.0.0.1:8010/healthz
-cd frontend
-npm run build
 ```
+
+서버가 실행된 동안 두 번째 PowerShell 터미널에서 상태 확인과 프론트엔드 빌드를 실행합니다.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8010/healthz
+Push-Location frontend
+npm run build
+Pop-Location
+```
+
+검증이 끝나면 첫 번째 터미널에서 `Ctrl+C`로 서버를 종료합니다.
 
 전략·리스크·주문 경로 변경에는 정상 입력뿐 아니라 중복 요청, 네트워크 실패, 손실 제한, `DRY_RUN=true` 동작을 확인합니다. 실계좌 API 키, 토큰, `.env`, 거래·계좌 원본 데이터는 커밋하지 않습니다.

@@ -1,17 +1,10 @@
-from predict_model_bidirectional import predict_event_bidirectional
-
-
-def _positive_probability(result: dict) -> float:
-    if not result or not result.get("ok"):
-        return 0.0
-    probabilities = result.get("proba") or [0.0, 0.0]
-    return float(probabilities[1]) if len(probabilities) >= 2 else 0.0
+from predict_model_bidirectional import positive_probability, predict_event_bidirectional
 
 
 def build_signal_summary(event: dict, market_brief: dict = None) -> dict:
     predictions = predict_event_bidirectional(event) if event else {}
     probability = {
-        target: _positive_probability(predictions.get(target))
+        target: positive_probability(predictions.get(target))
         for target in (
             "label_up_5m", "label_down_5m", "label_up_15m", "label_down_15m",
             "label_up_30m", "label_down_30m", "label_up_1h", "label_down_1h",

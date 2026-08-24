@@ -15,6 +15,34 @@ TARGETS = [
 ]
 
 
+def _json_scalar(value):
+    return value.item() if hasattr(value, "item") else value
+
+
+def _probability_payload(model, transformed, prediction: int) -> tuple[list[float], list, float]:
+    if not hasattr(model, "predict_proba"):
+        probabilities = [float(1 - prediction), float(prediction)]
+        return probabilities, [0, 1], float(prediction)
+
+    probabilities = [float(value) for value in model.predict_proba(transformed)[0]]
+    classes = [_json_scalar(value) for value in getattr(model, "classes_", range(len(probabilities)))]
+    positive_index = next((index for index, label in enumerate(classes) if label == 1), None)
+    positive_probability = probabilities[positive_index] if positive_index is not None else 0.0
+    return probabilities, classes, float(positive_probability)
+
+
+def positive_probability(result: dict) -> float:
+    if not result or not result.get("ok"):
+        return 0.0
+    if "positive_proba" in result:
+        return float(result["positive_proba"])
+
+    probabilities = result.get("proba") or []
+    classes = result.get("classes") or list(range(len(probabilities)))
+    positive_index = next((index for index, label in enumerate(classes) if label == 1), None)
+    return float(probabilities[positive_index]) if positive_index is not None else 0.0
+
+
 def _predict_one(event: dict, target_col: str):
     model_path = MODEL_DIR / f"{target_col}.joblib"
     if not model_path.exists():
@@ -39,15 +67,13 @@ def _predict_one(event: dict, target_col: str):
     }
     transformed = prep.transform(pd.DataFrame([row]))
     prediction = int(model.predict(transformed)[0])
-    probabilities = (
-        model.predict_proba(transformed)[0].tolist()
-        if hasattr(model, "predict_proba")
-        else [1 - prediction, prediction]
-    )
+    probabilities, classes, positive_proba = _probability_payload(model, transformed, prediction)
     return {
         "ok": True,
         "pred": prediction,
         "proba": probabilities,
+        "classes": classes,
+        "positive_proba": positive_proba,
         "model_path": str(model_path),
     }
 

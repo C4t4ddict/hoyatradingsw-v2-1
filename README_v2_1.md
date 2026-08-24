@@ -15,12 +15,33 @@
 - 실계좌 키 없이 확인할 때 `.env.example`의 `DRY_RUN=true`, `BINANCE_TESTNET=true` 유지
 
 ### backend
+PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item -LiteralPath .env.example -Destination .env
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8010
+```
+
+Windows CMD:
+
+```bat
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+copy .env.example .env
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8010
+```
+
+macOS/Linux 또는 Git Bash:
+
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
+source .venv/bin/activate  # Git Bash on Windows: source .venv/Scripts/activate
 pip install -r requirements.txt
-copy .env.example .env  # Windows. macOS/Linux는 cp 사용
+cp .env.example .env
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8010
 ```
 

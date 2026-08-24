@@ -1,6 +1,6 @@
 # Goldman Sachs `gs-quant` 적용 판단
 
-검토 기준일: 2026-08-25
+검토 기준일: 2026-08-25 KST (2026-08-24 UTC)
 
 ## 결론
 
@@ -16,6 +16,15 @@
 - Python: 공식 `pyproject.toml` 기준 3.10 이상, 3.12 지원
 - 주요 영역: `timeseries`, `backtests`, `risk`, `markets`, `instrument`, `analytics`
 - Marquee 데이터와 일부 API 기능은 Goldman Sachs의 client id/secret이 필요하다.
+
+### 재현 정보
+
+- 평가 리비전: `goldmansachs/gs-quant@02490b047a3b8db28723cb520be96ee5fc5423c5`
+- 평가 패키지: `gs-quant==2.1.4`
+- 환경: Python 3.12, HoyaTradingSW `requirements.txt` 설치 환경
+- 확인 명령: `python -m pip install --dry-run gs-quant==2.1.4`
+- 새로 해석된 패키지: `aenum==3.1.17`, `asteval==1.0.10`, `backoff==2.2.1`, `dataclasses-json==0.6.7`, `deprecation==2.1.0`, `dill==0.4.1`, `gs-quant==2.1.4`, `httpcore==1.0.9`, `httpx==0.28.1`, `inflection==0.5.1`, `lmfit==1.3.4`, `marshmallow==3.26.2`, `more-itertools==11.1.0`, `msgpack==1.2.1`, `mypy-extensions==1.1.0`, `nest-asyncio==1.6.0`, `numpy==2.3.5`, `opentelemetry-api==1.44.0`, `opentelemetry-sdk==1.44.0`, `opentelemetry-semantic-conventions==0.65b0`, `patsy==1.0.2`, `pydash==6.0.2`, `statsmodels==0.14.6`, `tqdm==4.70.0`, `typing-inspect==0.9.0`, `uncertainties==3.2.3`, `websockets==17.0.1`
+- 기존 환경에서 재사용된 주요 패키지: `cachetools==6.2.6`, `certifi==2026.7.22`, `pandas==2.3.1`, `python-dateutil==2.9.0.post0`, `scipy==1.18.1`, `PyYAML==6.0.2`, `requests==2.34.2`, `anyio==4.14.2`, `idna==3.19`, `h11==0.16.0`, `pytz==2026.3.post1`, `tzdata==2026.3`, `six==1.17.0`, `packaging==25.0`, `typing-extensions==4.16.0`, `charset-normalizer==3.5.1`, `urllib3==2.7.0`, `colorama==0.4.6`
 
 ## 현재 프로젝트와의 적합성
 
