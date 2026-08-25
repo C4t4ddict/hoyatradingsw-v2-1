@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
-from backend.app.services.paper_service import get_paper_payload, start_paper, pause_paper, reset_paper, update_paper_config, get_paper_audit
+from backend.app.services.paper_service import get_paper_payload, start_paper, pause_paper, reset_paper, update_paper_config, get_paper_audit, get_paper_strategy, get_paper_events
 
 router = APIRouter()
 
@@ -15,6 +15,8 @@ class PaperStartRequest(BaseModel):
     leverage: Optional[float] = None
     mode: Optional[str] = None
     live_refresh_sec: Optional[int] = None
+    target_volatility: Optional[float] = None
+    slippage_pct: Optional[float] = None
 
 @router.get('/api/paper')
 def api_paper():
@@ -42,3 +44,13 @@ def api_paper_config(body: PaperStartRequest = None):
 @router.get('/api/paper/audit')
 def api_paper_audit():
     return get_paper_audit()
+
+
+@router.get('/api/paper/strategy')
+def api_paper_strategy():
+    return get_paper_strategy()
+
+
+@router.get('/api/paper/events')
+def api_paper_events(limit: int = 200):
+    return get_paper_events(limit=limit)

@@ -116,6 +116,13 @@ npm run dev
   - config_snapshot / config
   - paper 무결성 및 디버깅용 점검 endpoint
 
+- `GET /api/paper/strategy`
+  - BTC/ETH/SOL 목표 비중, 현금 비중, 확정 4시간봉 신호
+  - 다음 봉 시가 대기 주문과 강제 리스크 상태
+
+- `GET /api/paper/events?limit=200`
+  - SQLite append-only 원장의 주문 대기·거부·체결 이벤트
+
 ### account
 - `GET /api/account?market_type=futures`
   - 실시간 계정 balance / positions 조회
@@ -126,8 +133,15 @@ npm run dev
   - execution_policy
 
 ## 현재 paper 엔진 메모
-- 현재 paper trading은 완전한 event-driven 실시간 체결 엔진이라기보다 rolling backtest 기반 simulated paper에 가깝다.
-- 대신 최근 작업으로 아래 보강이 들어갔다.
+- 기본 모드는 `vol_target_momentum` 이벤트 기반 simulated paper다.
+  - BTC/ETH/SOL 기본 비중 60/30/10
+  - 200일 EMA와 90일 모멘텀이 모두 양수일 때만 Long
+  - 30일 실현 변동성 기준 20% 목표 변동성, 최대 1배 Long/Cash
+  - 확정 4시간봉 신호 후 다음 4시간봉 시가 체결
+  - 일 1회 또는 목표 비중 대비 5%p 이상 이탈 시 리밸런싱
+  - 데이터 지연·잔고 불일치·스프레드·일 손실·낙폭 정책이 주문을 강제로 거부
+- 기존 ML/ensemble rolling backtest 모드는 호환 경로로 유지한다.
+- 공통 무결성 보강:
   - session_id 도입
   - config snapshot 저장
   - trades / alerts append-only 로그 기반 추가
@@ -135,6 +149,7 @@ npm run dev
   - runtime/result consistency 검사
   - config/runtime mismatch 안전 처리
   - paper audit endpoint 추가
+  - SQLite append-only 주문 이벤트 원장과 멱등성 키
 
 ## 관련 주요 파일
 - `backend/app/main.py`
