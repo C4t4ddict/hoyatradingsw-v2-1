@@ -44,6 +44,7 @@ export default async function IntelPage(){
   const ml = data?.ml_signal || {}
   const s = ml?.scores || {}
   const d = ml?.decision || {}
+  const collection = b.collection_status || {}
   const bestLong = [...rows].sort((a,b)=>(b.long_event_score||0)-(a.long_event_score||0))[0]
   const bestShort = [...rows].sort((a,b)=>(b.short_event_score||0)-(a.short_event_score||0))[0]
 
@@ -88,6 +89,22 @@ export default async function IntelPage(){
           <div><div className="metric-label">1h Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_1h||0)*100).toFixed(1)} / {(Number(s.down_1h||0)*100).toFixed(1)}</div></div>
           <div><div className="metric-label">4h Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_4h||0)*100).toFixed(1)} / {(Number(s.down_4h||0)*100).toFixed(1)}</div></div>
           <div><div className="metric-label">24h Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_24h||0)*100).toFixed(1)} / {(Number(s.down_24h||0)*100).toFixed(1)}</div></div>
+        </div>
+      </div>
+
+      <div className="card span-12">
+        <div className="split">
+          <div>
+            <div className="section-title">Collection Health</div>
+            <div className="section-sub">외부 RSS 장애 시에도 성공한 소스 또는 기존 캐시로 즉시 fallback</div>
+          </div>
+          <div className={`chip ${b.stale ? 'warn' : 'good'}`}>{b.stale ? 'STALE CACHE' : 'LIVE / CACHED'}</div>
+        </div>
+        <div className="mini-grid" style={{marginTop:14}}>
+          <div><div className="metric-label">Completed Sources</div><div className="metric-value mono" style={{fontSize:22}}>{collection.completed ?? '-'}</div></div>
+          <div><div className="metric-label">Timed Out</div><div className="metric-value mono" style={{fontSize:22}}>{(collection.timed_out||[]).length}</div></div>
+          <div><div className="metric-label">Failed</div><div className="metric-value mono" style={{fontSize:22}}>{(collection.failed||[]).length}</div></div>
+          <div><div className="metric-label">Elapsed</div><div className="metric-value mono" style={{fontSize:22}}>{collection.elapsed_ms ?? '-'} ms</div></div>
         </div>
       </div>
 
