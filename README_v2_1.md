@@ -132,6 +132,20 @@ npm run dev
   - risk_guard
   - execution_policy
 
+### strategy governance
+- `POST /api/strategies`
+  - 전략 버전, 파라미터, 데이터 기준일, 코드 SHA를 Research 단계로 등록
+- `GET /api/strategies`
+  - 등록된 전략과 현재 승인 단계 조회
+- `GET /api/strategies/{strategy_id}`
+  - 전략 재현 정보와 승인·거부·자동 강등 이력
+- `POST /api/strategies/{strategy_id}/transition`
+  - 한 단계씩만 수동 승격; 기간·거래 수·홀드아웃 Sharpe·낙폭·슬리피지 gate 강제
+- `POST /api/strategies/{strategy_id}/demote`
+  - 리스크·낙폭·슬리피지 기준 위반 시 한 단계 자동 강등
+
+`small_live`와 `live` 승격에는 실제 거래소 검증 증적이 필수이며, 현재 개발 범위에서는 해당 증적을 생성하지 않는다.
+
 ## 현재 paper 엔진 메모
 - 기본 모드는 `vol_target_momentum` 이벤트 기반 simulated paper다.
   - BTC/ETH/SOL 기본 비중 60/30/10
