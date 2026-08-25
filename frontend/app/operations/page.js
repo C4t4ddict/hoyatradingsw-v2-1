@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { koAlertMessage, koCategory, koStatus } from '../../lib/ko'
 
 const BASE = 'http://127.0.0.1:8010'
 const SECRET_NAMES = [
@@ -92,50 +93,50 @@ export default function OperationsPage(){
 
   return (<>
     <div className="topbar">
-      <div><div className="topbar-title">Operations & Security</div><div className="topbar-sub">worker·데이터·원장·경보·Live 전환을 한 화면에서 감사하고 제어</div></div>
-      <div className={`chip ${control.live_enabled?'bad':'good'}`}>{control.live_enabled?'LIVE ENABLED':'PAPER SAFE'}</div>
+      <div><div className="topbar-title">운영·보안</div><div className="topbar-sub">작업자·데이터·원장·경보·실거래 전환을 한 화면에서 감사하고 제어합니다.</div></div>
+      <div className={`chip ${control.live_enabled?'bad':'good'}`}>{control.live_enabled?'실거래 활성':'모의투자 보호'}</div>
     </div>
 
-    <h1 className="page-title">Operations</h1>
-    <p className="page-sub">민감정보는 표시하지 않으며, Live는 설정 토큰과 두 번의 명시적 확인을 모두 통과해야 제한 시간 동안만 활성화된다.</p>
+    <h1 className="page-title">운영·보안</h1>
+    <p className="page-sub">민감정보는 표시하지 않으며, 실거래는 설정 토큰과 두 번의 명시적 확인을 모두 통과해야 제한 시간 동안만 활성화됩니다.</p>
     {message&&<div className="card soft" style={{marginBottom:18,padding:14}}>{message}</div>}
 
     <div className="grid">
-      <div className="card span-3 emphasis"><div className="metric-label">Worker</div><div className={`metric-value ${worker.alive?'good':'bad'}`}>{worker.alive?'ALIVE':'DOWN'}</div><div className="metric-note">PID {worker.pid||'-'}</div></div>
-      <div className="card span-3"><div className="metric-label">Ledger Integrity</div><div className={`metric-value ${integrity.ok?'good':'bad'}`}>{integrity.ok?'OK':'FAIL'}</div><div className="metric-note">{integrity.events_checked||0} events checked</div></div>
-      <div className="card span-3"><div className="metric-label">Active Alerts</div><div className="metric-value mono">{ops?.active_count||0}</div><div className="metric-note">critical {ops?.critical_count||0}</div></div>
-      <div className="card span-3"><div className="metric-label">Last Update</div><div className="metric-value mono" style={{fontSize:18}}>{fmtDate(audit.last_update)}</div><div className="metric-note">Paper runtime heartbeat</div></div>
+      <div className="card span-3 emphasis"><div className="metric-label">작업자</div><div className={`metric-value ${worker.alive?'good':'bad'}`}>{worker.alive?'정상':'중지'}</div><div className="metric-note">PID {worker.pid||'-'}</div></div>
+      <div className="card span-3"><div className="metric-label">원장 무결성</div><div className={`metric-value ${integrity.ok?'good':'bad'}`}>{integrity.ok?'정상':'실패'}</div><div className="metric-note">이벤트 {integrity.events_checked||0}건 확인</div></div>
+      <div className="card span-3"><div className="metric-label">활성 경보</div><div className="metric-value mono">{ops?.active_count||0}</div><div className="metric-note">위험 {ops?.critical_count||0}건</div></div>
+      <div className="card span-3"><div className="metric-label">마지막 갱신</div><div className="metric-value mono" style={{fontSize:18}}>{fmtDate(audit.last_update)}</div><div className="metric-note">모의투자 실행 상태</div></div>
 
       <div className="card span-7">
-        <div className="split"><div><div className="section-title">Live Safety Control</div><div className="section-sub">기본 Paper, 5분 challenge, 2차 확인, 4시간 자동 만료, 주문 금액 상한을 강제한다.</div></div><div className={`chip ${control.live_enabled?'bad':'good'}`}>{(control.mode||'paper').toUpperCase()}</div></div>
+        <div className="split"><div><div className="section-title">실거래 안전 제어</div><div className="section-sub">기본 모의투자, 5분 인증, 2차 확인, 4시간 자동 만료, 주문 금액 상한을 강제합니다.</div></div><div className={`chip ${control.live_enabled?'bad':'good'}`}>{control.live_enabled?'실거래':'모의투자'}</div></div>
         <div className="mini-grid">
-          <div><div className="metric-label">Settings Token</div><input type="password" value={settingsToken} onChange={event=>setSettingsToken(event.target.value)} placeholder="X-Settings-Token" autoComplete="off" /></div>
-          <div><div className="metric-label">Max Order USDT</div><input type="number" value={cap} onChange={event=>setCap(event.target.value)} /></div>
-          <div><div className="metric-label">Live Expires</div><div className="metric-note mono">{fmtDate(control.expires_at)}</div></div>
-          <div><div className="metric-label">Challenge</div><div className="metric-note">{challenge?'1차 확인 완료':'미요청'} / {fmtDate(control.challenge_expires_at)}</div></div>
+          <div><div className="metric-label">설정 토큰</div><input type="password" value={settingsToken} onChange={event=>setSettingsToken(event.target.value)} placeholder="X-Settings-Token" autoComplete="off" /></div>
+          <div><div className="metric-label">최대 주문 USDT</div><input type="number" value={cap} onChange={event=>setCap(event.target.value)} /></div>
+          <div><div className="metric-label">실거래 만료</div><div className="metric-note mono">{fmtDate(control.expires_at)}</div></div>
+          <div><div className="metric-label">인증 상태</div><div className="metric-note">{challenge?'1차 확인 완료':'미요청'} / {fmtDate(control.challenge_expires_at)}</div></div>
         </div>
         <div className="button-row" style={{marginTop:16}}>
           <button disabled={busy||!settingsToken} onClick={()=>mutate('/api/live/order-cap',{max_order_usdt:Number(cap)})}>상한 저장</button>
-          <button disabled={busy||!settingsToken||control.live_enabled} onClick={requestChallenge}>1차 Live 확인</button>
-          <button disabled={busy||!settingsToken||!challenge||control.live_enabled} onClick={confirmLive}>2차 Live 활성화</button>
-          <button disabled={busy||!settingsToken||!control.live_enabled} onClick={()=>mutate('/api/live/disable')}>즉시 Paper 전환</button>
+          <button disabled={busy||!settingsToken||control.live_enabled} onClick={requestChallenge}>1차 실거래 확인</button>
+          <button disabled={busy||!settingsToken||!challenge||control.live_enabled} onClick={confirmLive}>2차 실거래 활성화</button>
+          <button disabled={busy||!settingsToken||!control.live_enabled} onClick={()=>mutate('/api/live/disable')}>즉시 모의투자 전환</button>
         </div>
       </div>
 
       <div className="card span-5">
-        <div className="section-title">Encrypted Secrets</div>
+        <div className="section-title">암호화된 자격증명</div>
         <div className="section-sub">값은 Fernet으로 암호화되며 API와 화면에는 이름/설정 여부만 반환된다.</div>
         <div style={{display:'flex',flexDirection:'column',gap:12}}>
           <select value={secretName} onChange={event=>setSecretName(event.target.value)}>{SECRET_NAMES.map(name=><option key={name} value={name}>{name}</option>)}</select>
           <input type="password" value={secretValue} onChange={event=>setSecretValue(event.target.value)} placeholder="저장할 값 (화면에 재표시되지 않음)" autoComplete="new-password" />
           <div className="button-row"><button disabled={busy||!settingsToken||!secretValue} onClick={storeSecret}>암호화 저장</button></div>
         </div>
-        <div style={{marginTop:14,display:'flex',gap:8,flexWrap:'wrap'}}>{vaultSecrets.map(secret=><span key={secret.name} className="chip good">{secret.name} · STORED</span>)}</div>
-        <div className={`chip ${security?.vault?.encryption_configured?'good':'warn'}`} style={{marginTop:14}}>{security?.vault?.encryption_configured?'MASTER KEY READY':'MASTER KEY REQUIRED'}</div>
+        <div style={{marginTop:14,display:'flex',gap:8,flexWrap:'wrap'}}>{vaultSecrets.map(secret=><span key={secret.name} className="chip good">{secret.name} · 저장됨</span>)}</div>
+        <div className={`chip ${security?.vault?.encryption_configured?'good':'warn'}`} style={{marginTop:14}}>{security?.vault?.encryption_configured?'마스터 키 준비됨':'마스터 키 필요'}</div>
       </div>
 
       <div className="card span-12">
-        <div className="section-title">Operations Actions</div>
+        <div className="section-title">운영 작업</div>
         <div className="button-row">
           <button disabled={busy||!settingsToken} onClick={()=>simpleAction('/api/paper/ledger/backup')}>원장 백업</button>
           <button disabled={busy||!settingsToken} onClick={()=>simpleAction('/api/paper/ledger/export')}>CSV 내보내기</button>
@@ -144,10 +145,10 @@ export default function OperationsPage(){
         </div>
       </div>
 
-      <div className="card span-12"><div className="section-title">Operational Alerts</div><table className="table"><thead><tr><th>Status</th><th>Severity</th><th>Category</th><th>Last Seen</th><th>Count</th><th>Message</th></tr></thead><tbody>{alerts.slice(0,30).map(alert=><tr key={alert.alert_id}><td>{alert.status}</td><td className={alert.severity==='critical'?'bad':alert.severity==='warning'?'warn':'good'}>{alert.severity}</td><td>{alert.category}</td><td className="mono">{fmtDate(alert.last_seen_at)}</td><td className="mono">{alert.occurrence_count}</td><td>{alert.message}</td></tr>)}</tbody></table></div>
+      <div className="card span-12"><div className="section-title">운영 경보</div><table className="table"><thead><tr><th>상태</th><th>심각도</th><th>분류</th><th>마지막 감지</th><th>횟수</th><th>메시지</th></tr></thead><tbody>{alerts.slice(0,30).map(alert=><tr key={alert.alert_id}><td>{koStatus(alert.status)}</td><td className={alert.severity==='critical'?'bad':alert.severity==='warning'?'warn':'good'}>{koStatus(alert.severity)}</td><td>{koCategory(alert.category)}</td><td className="mono">{fmtDate(alert.last_seen_at)}</td><td className="mono">{alert.occurrence_count}</td><td>{koAlertMessage(alert.message)}</td></tr>)}</tbody></table></div>
 
-      <div className="card span-6"><div className="section-title">Settings History</div><table className="table"><thead><tr><th>Time</th><th>Actor</th><th>Action</th></tr></thead><tbody>{history.slice(0,20).map(row=><tr key={row.sequence}><td className="mono">{fmtDate(row.changed_at)}</td><td>{row.actor}</td><td>{row.action}</td></tr>)}</tbody></table></div>
-      <div className="card span-6"><div className="section-title">Audit Event History</div><table className="table"><thead><tr><th>Time</th><th>Type</th><th>Version</th></tr></thead><tbody>{events.slice(0,20).map(row=><tr key={row.event_id}><td className="mono">{fmtDate(row.occurred_at)}</td><td>{row.event_type}</td><td>{row.strategy_version||'-'}</td></tr>)}</tbody></table></div>
+      <div className="card span-6"><div className="section-title">설정 변경 이력</div><table className="table"><thead><tr><th>시간</th><th>작업자</th><th>작업</th></tr></thead><tbody>{history.slice(0,20).map(row=><tr key={row.sequence}><td className="mono">{fmtDate(row.changed_at)}</td><td>{row.actor}</td><td>{row.action}</td></tr>)}</tbody></table></div>
+      <div className="card span-6"><div className="section-title">감사 이벤트 이력</div><table className="table"><thead><tr><th>시간</th><th>유형</th><th>버전</th></tr></thead><tbody>{events.slice(0,20).map(row=><tr key={row.event_id}><td className="mono">{fmtDate(row.occurred_at)}</td><td>{row.event_type}</td><td>{row.strategy_version||'-'}</td></tr>)}</tbody></table></div>
     </div>
   </>)
 }

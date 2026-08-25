@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -71,6 +72,16 @@ def _priority_score(title: str, summary: str) -> int:
 
 _CACHE_PATH = os.getenv("NEWS_TRANSLATION_CACHE_PATH", "data/news_translation_cache.json")
 _CACHE_TTL_SEC = int(os.getenv("NEWS_TRANSLATION_CACHE_TTL_SEC", str(60 * 60 * 12)))
+_CACHE_LOCK = threading.Lock()
+
+
+def _translation_looks_incomplete(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return True
+    if text.count("(") != text.count(")") or text.count("[") != text.count("]"):
+        return True
+    return text.endswith((" 내", " 하", " 되", " 있", " 없", " 및", " 또는"))
 
 
 def _load_cache() -> Dict[str, Dict[str, str]]:
@@ -101,33 +112,48 @@ def _translate_to_korean(text: str) -> str:
 
     key = text.strip()
     now = int(time.time())
-    cache = _load_cache()
-    hit = cache.get(key)
+    with _CACHE_LOCK:
+        hit = _load_cache().get(key)
     if isinstance(hit, dict):
         ts = int(hit.get("ts", 0)) if str(hit.get("ts", "")).isdigit() else 0
         if ts and (now - ts) <= _CACHE_TTL_SEC:
             v = hit.get("ko")
-            if isinstance(v, str) and v:
+            if isinstance(v, str) and v and v.strip() != key and not _translation_looks_incomplete(v):
                 return v
 
+    translated = ""
     try:
         q = urllib.parse.quote(text)
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ko&dt=t&q={q}"
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q={q}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=2) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
         translated = "".join(part[0] for part in data[0] if part and part[0])
-        translated = translated or text
-
-        cache[key] = {"ko": translated, "ts": now}
-        if len(cache) > 2000:
-            keys = list(cache.keys())[:500]
-            for k in keys:
-                cache.pop(k, None)
-        _save_cache(cache)
-        return translated
     except Exception:
-        return text
+        translated = ""
+
+    if not translated or translated.strip() == text.strip() or _translation_looks_incomplete(translated):
+        try:
+            q = urllib.parse.quote(text)
+            url = f"https://api.mymemory.translated.net/get?q={q}&langpair=en%7Cko"
+            req = urllib.request.Request(url, headers={"User-Agent": "HoyaTradingSW/2.1"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            translated = html.unescape(str((data.get("responseData") or {}).get("translatedText") or ""))
+        except Exception:
+            translated = ""
+
+    if translated and translated.strip() != text.strip() and not _translation_looks_incomplete(translated):
+        with _CACHE_LOCK:
+            cache = _load_cache()
+            cache[key] = {"ko": translated, "ts": now}
+            if len(cache) > 2000:
+                keys = list(cache.keys())[:500]
+                for k in keys:
+                    cache.pop(k, None)
+            _save_cache(cache)
+        return translated
+    return text
 
 
 _NEWS_CACHE_PATH = os.getenv("NEWS_ITEMS_CACHE_PATH", "data/news_items_cache.json")
