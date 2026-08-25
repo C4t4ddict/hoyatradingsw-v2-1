@@ -12,6 +12,8 @@ from backtest import fetch_ohlcv, fetch_funding_rates, run_backtest, run_ensembl
 from exchange import get_exchange
 from notifier import send_telegram
 from market_intel import get_market_brief
+from paper_engine import FOUR_HOURS_MS, EventDrivenPaperEngine, RiskPolicy, VolTargetMomentumStrategy
+from paper_ledger import TradingLedger
 try:
     from app.services.ml_signal_service import build_signal_summary
 except Exception:
@@ -22,6 +24,7 @@ PID_PATH = os.getenv("PAPER_LIVE_PID_PATH", "data/paper_live_worker.pid")
 LOCK_PATH = os.getenv("PAPER_LIVE_LOCK_PATH", "data/paper_live_worker.lock")
 
 SESSION_DIR = os.getenv("PAPER_LIVE_SESSION_DIR", "data/paper_sessions")
+LEDGER_PATH = os.getenv("TRADING_LEDGER_PATH", "data/trading_ledger.sqlite3")
 
 
 def _session_paths(session_id: str):
@@ -244,6 +247,10 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "config_snapshot": state.get("config_snapshot"),
         "consistency": state.get("consistency"),
         "runtime_guard": state.get("runtime_guard"),
+        "event_engine": state.get("event_engine"),
+        "strategy_decision": state.get("strategy_decision"),
+        "order_events": state.get("order_events"),
+        "risk_status": state.get("risk_status"),
     }
 
 
@@ -532,7 +539,126 @@ def get_audit_payload(path: str = STATE_PATH) -> Dict[str, Any]:
         "runtime_guard": runtime_guard,
         "config_snapshot": state.get("config_snapshot"),
         "config": state.get("config"),
+        "strategy_decision": state.get("strategy_decision"),
+        "risk_status": state.get("risk_status"),
+        "recent_events": TradingLedger(LEDGER_PATH).list_events(session_id=state.get("session_id"), limit=100) if state.get("session_id") else [],
     }
+
+
+def get_strategy_payload(path: str = STATE_PATH) -> Dict[str, Any]:
+    state = load_state(path)
+    engine = state.get("event_engine") or {}
+    portfolio = engine.get("portfolio") or {}
+    return {
+        "session_id": state.get("session_id"),
+        "strategy": state.get("executed_strategy"),
+        "timeframe": state.get("executed_timeframe"),
+        "decision": state.get("strategy_decision"),
+        "portfolio": portfolio,
+        "pending_orders": engine.get("pending_orders") or [],
+        "risk_status": state.get("risk_status"),
+        "last_update": state.get("last_update"),
+    }
+
+
+def get_ledger_events(path: str = STATE_PATH, limit: int = 200) -> Dict[str, Any]:
+    state = load_state(path)
+    session_id = state.get("session_id")
+    events = TradingLedger(LEDGER_PATH).list_events(session_id=session_id, limit=limit) if session_id else []
+    return {"session_id": session_id, "count": len(events), "events": events}
+
+
+def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path: str) -> Dict[str, Any]:
+    """Advance the portfolio only from confirmed 4h closes and next-bar opens."""
+    now = datetime.now(timezone.utc)
+    now_ms = int(now.timestamp() * 1000)
+    end_iso = now.isoformat()
+    start_iso = (now - timedelta(days=230)).isoformat()
+    symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+    exchange = get_exchange(read_only=True, market_type="spot")
+    histories: Dict[str, Any] = {}
+    for symbol in symbols:
+        try:
+            candles = fetch_ohlcv(exchange, symbol, "4h", start_iso, end_iso)
+        except Exception:
+            candles = []
+        histories[symbol] = [row for row in candles if int(row[0]) + FOUR_HOURS_MS <= now_ms]
+
+    ledger = TradingLedger(LEDGER_PATH)
+    strategy = VolTargetMomentumStrategy(target_volatility=float(cfg.get("target_volatility", 0.20)))
+    policy = RiskPolicy(
+        daily_loss_limit_pct=float(cfg.get("daily_loss_limit_pct", 0.02)),
+        reduce_risk_drawdown_pct=float(cfg.get("reduce_risk_drawdown_pct", 0.10)),
+        block_new_buy_drawdown_pct=float(cfg.get("block_new_buy_drawdown_pct", 0.15)),
+        max_spread_bps=float(cfg.get("max_spread_bps", 25.0)),
+    )
+    engine = EventDrivenPaperEngine(
+        session_id=state["session_id"],
+        initial_cash=float(cfg.get("initial_usdt", 1000.0)),
+        ledger=ledger,
+        strategy=strategy,
+        risk_policy=policy,
+        fee_pct=float(cfg.get("taker_fee_pct", cfg.get("fee_pct", 0.0005))),
+        slippage_pct=float(cfg.get("slippage_pct", 0.0005)),
+    )
+    if state.get("event_engine"):
+        engine.restore(state["event_engine"])
+
+    fills = []
+    available = {symbol: rows[-1] for symbol, rows in histories.items() if rows}
+    if available:
+        latest_open_ms = min(int(row[0]) for row in available.values())
+        fills = engine.on_bar_open(
+            timestamp_ms=latest_open_ms,
+            open_prices={symbol: float(row[1]) for symbol, row in available.items()},
+        )
+    outcome = engine.on_bar_close(
+        histories,
+        now_ms=now_ms,
+        balance_consistent=bool((state.get("consistency") or {}).get("ok", True)),
+    )
+    prices = {symbol: float(rows[-1][4]) for symbol, rows in histories.items() if rows}
+    nav = engine.portfolio.equity(prices)
+    engine.portfolio.equity_peak = max(engine.portfolio.equity_peak, nav)
+    initial = engine.portfolio.initial_cash
+    previous_orders = list(state.get("order_events") or [])
+    state["order_events"] = (previous_orders + fills + outcome.get("orders", []))[-200:]
+    state["event_engine"] = engine.snapshot()
+    state["strategy_decision"] = outcome.get("decision")
+    state["risk_status"] = {
+        "data_quality": (outcome.get("decision") or {}).get("data_quality"),
+        "rejected": outcome.get("rejected") or [],
+        "pending_count": len(engine.pending_orders),
+        "drawdown_pct": 1.0 - nav / max(engine.portfolio.equity_peak, 1e-9),
+    }
+    filled_events = [event for event in state["order_events"] if event.get("status") == "filled"]
+    state["metrics"] = {
+        "virtual_balance": nav,
+        "starting_balance": initial,
+        "realized_pnl": engine.portfolio.daily_realized_pnl,
+        "return_pct": (nav / max(initial, 1e-9) - 1.0) * 100.0,
+        "trades": len(filled_events),
+        "liquidations": 0,
+    }
+    state["result"] = {
+        "initial_usdt": initial,
+        "final_usdt": nav,
+        "return_pct": state["metrics"]["return_pct"],
+        "trades": filled_events,
+        "total_trades": state["metrics"]["trades"],
+        "liquidation_count": 0,
+        "note": "confirmed 4h close signal; pending orders execute at next 4h open",
+    }
+    state["executed_strategy"] = "vol_target_momentum"
+    state["executed_timeframe"] = "4h"
+    state["executed_position_mode"] = "long_cash"
+    state["fallback_mode"] = None if (outcome.get("decision") or {}).get("data_quality", {}).get("ok") else "data_quality_hold"
+    state["last_update"] = _now_iso()
+    state["consistency"] = _build_consistency_report(state)
+    save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
+    return state
 
 def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     if not _acquire_lock():
@@ -553,6 +679,8 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         _release_lock()
         return state
     state["fallback_mode"] = None
+    if cfg.get("mode") == "vol_target_momentum" or cfg.get("strategy") == "vol_target_momentum":
+        return _update_vol_target_session(state, cfg, path)
     market_type = cfg.get("market_type", "futures")
     symbol = cfg.get("symbol", "BTC/USDT:USDT")
     timeframe = cfg.get("timeframe", "15m")

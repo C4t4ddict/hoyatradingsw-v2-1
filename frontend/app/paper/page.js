@@ -58,6 +58,10 @@ export default function PaperPage(){
   const s=data?.ml_signal?.scores||{}
   const note=data?.paper_note||''
   const latestTrade = trades.length ? trades[trades.length - 1] : null
+  const decision=data?.strategy_decision||{}
+  const targets=decision?.target_weights||{}
+  const riskStatus=data?.risk_status||{}
+  const orderEvents=data?.order_events||[]
   const runningState = data?.running ? 'RUN' : (data?.paused ? 'PAUSE':'STOP')
   const latestTradePnlClass = Number(latestTrade?.pnl || 0) >= 0 ? 'good' : 'bad'
 
@@ -180,6 +184,45 @@ export default function PaperPage(){
               <td className={`mono ${Number(t.pnl_pct||0)>=0?'good':'bad'}`}>{fmt(t.pnl_pct,'%')}</td>
             </tr>)}
           </tbody>
+        </table>
+      </div>
+
+      <div className="card span-7">
+        <div className="section-title">Volatility Target Allocation</div>
+        <div className="section-sub">확정 4시간봉 기준 BTC 60% / ETH 30% / SOL 10% 기반 목표 비중이며, 신호·실현 변동성에 따라 현금 비중이 자동 조정된다.</div>
+        <table className="table">
+          <thead><tr><th>Asset</th><th>Target Weight</th><th>Signal</th><th>Volatility</th></tr></thead>
+          <tbody>{Object.entries(targets).map(([symbol,weight])=>{
+            const signal=decision?.signals?.[symbol]||{}
+            return <tr key={symbol}>
+              <td>{symbol}</td>
+              <td className="mono">{fmt(Number(weight)*100,'%')}</td>
+              <td className={signal.active?'good':'warn'}>{signal.active?'LONG':'CASH'}</td>
+              <td className="mono">{fmt(Number(signal.realized_volatility||0)*100,'%')}</td>
+            </tr>
+          })}</tbody>
+        </table>
+        <div className="chip" style={{marginTop:12}}>Cash · {fmt(Number(decision.cash_weight||0)*100,'%')}</div>
+      </div>
+
+      <div className="card span-5">
+        <div className="section-title">Enforced Risk Status</div>
+        <div className="metric-label">Drawdown</div>
+        <div className="metric-value mono" style={{fontSize:26}}>{fmt(Number(riskStatus.drawdown_pct||0)*100,'%')}</div>
+        <div className="metric-label" style={{marginTop:12}}>Pending Orders</div>
+        <div className="metric-value mono" style={{fontSize:26}}>{riskStatus.pending_count||0}</div>
+        <div className="section-sub">{(riskStatus.rejected||[]).join(', ')||'현재 데이터·손실·스프레드 차단 사유 없음'}</div>
+      </div>
+
+      <div className="card span-12">
+        <div className="section-title">Order Event Log</div>
+        <table className="table">
+          <thead><tr><th>Status</th><th>Symbol</th><th>Side</th><th>Target</th><th>Reason</th></tr></thead>
+          <tbody>{orderEvents.slice(-20).reverse().map((event,index)=><tr key={`${event.order_id||index}-${event.status}`}>
+            <td>{event.status||'-'}</td><td>{event.symbol||'-'}</td><td>{event.side||'-'}</td>
+            <td className="mono">{fmt(Number(event.target_weight||0)*100,'%')}</td>
+            <td>{(event.risk?.reasons||[]).join(', ')||'-'}</td>
+          </tr>)}</tbody>
         </table>
       </div>
 
