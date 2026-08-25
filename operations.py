@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional
 
 from notifier import send_telegram
 from paper_ledger import TradingLedger
+from security import mask_text, redact_sensitive
 
 
 SEVERITIES = {"info": 10, "warning": 20, "critical": 30}
@@ -120,7 +121,7 @@ class OperationalStore:
                     WHERE alert_id = ?
                     """,
                     (
-                        category, severity, message, json.dumps(details or {}, ensure_ascii=False, sort_keys=True),
+                        category, severity, mask_text(message), json.dumps(redact_sensitive(details or {}), ensure_ascii=False, sort_keys=True),
                         observed_at, observed_at if should_notify else current["last_notified_at"], current["alert_id"],
                     ),
                 )
@@ -131,8 +132,8 @@ class OperationalStore:
                 connection.execute(
                     "INSERT INTO operational_alerts VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 1)",
                     (
-                        alert_id, dedup_key, category, severity, message,
-                        json.dumps(details or {}, ensure_ascii=False, sort_keys=True),
+                        alert_id, dedup_key, category, severity, mask_text(message),
+                        json.dumps(redact_sensitive(details or {}), ensure_ascii=False, sort_keys=True),
                         observed_at, observed_at, observed_at,
                     ),
                 )

@@ -32,6 +32,8 @@ from strategy_store import (
 from market_intel import get_market_brief, fetch_items
 from ml_dataset import append_events, load_events, enrich_with_price_labels
 from predict_model import positive_probability, predict_event
+from live_controls import get_live_control_store
+from security import mask_text, resolve_secret
 
 load_dotenv()
 
@@ -48,7 +50,7 @@ allowed_spot = set(trade_cfg.get("allowed_symbols_spot", trade_cfg.get("allowed_
 allowed_futures = set(trade_cfg.get("allowed_symbols_futures", ["BTC/USDT:USDT", "ETH/USDT:USDT"]))
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
-WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
+WEBHOOK_TOKEN = resolve_secret("WEBHOOK_TOKEN")
 WEBHOOK_MIN_EXPECTED_RETURN_PCT = float(os.getenv("WEBHOOK_MIN_EXPECTED_RETURN_PCT", "-999"))
 WEBHOOK_MAX_ALLOWED_MDD_PCT = float(os.getenv("WEBHOOK_MAX_ALLOWED_MDD_PCT", "999"))
 WEBHOOK_AUTO_SELECT_VERSION = os.getenv("WEBHOOK_AUTO_SELECT_VERSION", "false").lower() == "true"
@@ -72,6 +74,12 @@ ML_WEIGHT_4H = float(os.getenv("ML_WEIGHT_4H", "0.5"))
 ML_WEIGHT_24H = float(os.getenv("ML_WEIGHT_24H", "0.3"))
 ML_MIN_COMPOSITE_SCORE = float(os.getenv("ML_MIN_COMPOSITE_SCORE", "0.54"))
 ML_MIN_SHORT_CONFIRM = float(os.getenv("ML_MIN_SHORT_CONFIRM", "0.50"))
+
+
+def _authorize_live_order(position_usdt: float, effective_dry_run: bool):
+    if effective_dry_run:
+        return {"allowed": True, "reasons": [], "control": {"mode": "paper"}}
+    return get_live_control_store().authorize_order(position_usdt)
 
 
 def _market_kind(v: Optional[str]) -> str:
@@ -555,6 +563,10 @@ def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] 
             },
         }
 
+    live_authorization = _authorize_live_order(0.0, False)
+    if not live_authorization["allowed"]:
+        return {"ignored": True, "reason": ",".join(live_authorization["reasons"]), "live_control": live_authorization["control"]}
+
     ex = _get_exchange("futures", read_only=False)
     results = {"symbol": req.symbol, "leverage": req.leverage, "margin_mode": req.margin_mode}
 
@@ -562,13 +574,13 @@ def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] 
         if hasattr(ex, "set_margin_mode"):
             results["set_margin_mode"] = ex.set_margin_mode(req.margin_mode, req.symbol)
     except Exception as e:
-        results["set_margin_mode_error"] = str(e)
+        results["set_margin_mode_error"] = mask_text(str(e))
 
     try:
         if hasattr(ex, "set_leverage"):
             results["set_leverage"] = ex.set_leverage(req.leverage, req.symbol)
     except Exception as e:
-        results["set_leverage_error"] = str(e)
+        results["set_leverage_error"] = mask_text(str(e))
 
     return {"ok": True, **results}
 
@@ -581,6 +593,10 @@ def futures_position_mode(req: FuturesPositionModeRequest, x_webhook_token: Opti
     if DRY_RUN:
         return {"ok": True, "dry_run": True, "position_mode": "hedge" if req.hedged else "one-way"}
 
+    live_authorization = _authorize_live_order(0.0, False)
+    if not live_authorization["allowed"]:
+        return {"ignored": True, "reason": ",".join(live_authorization["reasons"]), "live_control": live_authorization["control"]}
+
     ex = _get_exchange("futures", read_only=False)
     result = {"position_mode": "hedge" if req.hedged else "one-way"}
 
@@ -590,7 +606,7 @@ def futures_position_mode(req: FuturesPositionModeRequest, x_webhook_token: Opti
         else:
             raise RuntimeError("exchange does not support set_position_mode")
     except Exception as e:
-        result["set_position_mode_error"] = str(e)
+        result["set_position_mode_error"] = mask_text(str(e))
 
     return {"ok": True, **result}
 
@@ -680,8 +696,9 @@ def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None
                 if symbol_active >= symbol_limit:
                     return {"ignored": True, "reason": f"symbol concurrent limit reached({signal.symbol}): {symbol_active}/{symbol_limit}"}
         except Exception as e:
-            maybe_alert("포지션 제한 체크 실패", f"{mt} {str(e)}")
-            return {"ignored": True, "reason": f"cannot verify concurrent positions: {str(e)}"}
+            safe_error = mask_text(str(e))
+            maybe_alert("포지션 제한 체크 실패", f"{mt} {safe_error}")
+            return {"ignored": True, "reason": f"cannot verify concurrent positions: {safe_error}"}
 
     profile_name, profile = resolve_profile(signal.risk_profile)
 
@@ -823,12 +840,17 @@ def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None
         if WEBHOOK_TEST_TAG_FORCE_DRY_RUN and signal.strategy_tag in ["test", "paper"]:
             effective_dry_run = True
 
+    live_authorization = _authorize_live_order(position_usdt, effective_dry_run)
+    if not live_authorization["allowed"]:
+        return {"ignored": True, "reason": ",".join(live_authorization["reasons"]), "live_control": live_authorization["control"]}
+
     ex = _get_exchange(mt, read_only=False)
     try:
         order = place_market_order(ex, signal.symbol, signal.side, qty, dry_run=effective_dry_run)
     except Exception as e:
-        maybe_alert("주문 실패", f"{mt} {signal.symbol} {signal.side} / {str(e)}")
-        raise HTTPException(500, f"order failed: {str(e)}")
+        safe_error = mask_text(str(e))
+        maybe_alert("주문 실패", f"{mt} {signal.symbol} {signal.side} / {safe_error}")
+        raise HTTPException(500, f"order failed: {safe_error}")
 
     if signal.signal_id:
         save_signal(signal.signal_id)

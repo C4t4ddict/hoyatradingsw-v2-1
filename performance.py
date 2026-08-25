@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime, timezone
 from typing import Dict, Any, List
+from security import redact_sensitive
 
 PERF_LOG = os.getenv("PERF_LOG", "data/performance_log.jsonl")
 
@@ -16,7 +17,7 @@ def log_trade(event: Dict[str, Any], path: str = PERF_LOG):
     _ensure_parent(path)
     payload = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        **event,
+        **redact_sensitive(event),
     }
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")

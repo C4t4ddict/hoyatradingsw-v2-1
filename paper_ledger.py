@@ -11,6 +11,7 @@ import sqlite3
 import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
+from security import redact_sensitive
 
 
 def _utc_now() -> str:
@@ -127,7 +128,7 @@ class TradingLedger:
         if environment not in {"paper", "live"}:
             raise ValueError("environment must be paper or live")
         timestamp = occurred_at or _utc_now()
-        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        payload_json = json.dumps(redact_sensitive(payload), ensure_ascii=False, sort_keys=True)
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
