@@ -311,67 +311,6 @@ def _entry_signal_short(strategy: str, i: int, opens: List[float], closes: List[
     if strategy == "dual_momentum_trend":
         if i < 30:
             return False
-        mom = (closes[i] - closes[i-20]) / max(closes[i-20],1e-9)
-        return mom > 0.02 and ema_fast[i] > ema_slow[i]
-
-    if strategy == "volatility_breakout_atr":
-        if i < 20:
-            return False
-        rng = sum((highs[j]-lows[j]) for j in range(i-14,i+1)) / 15.0
-        prev_high = max(highs[i-20:i])
-        return closes[i] > prev_high and (highs[i]-lows[i]) > rng*1.2
-
-    if strategy == "donchian_vol_filter":
-        if i < breakout_lookback + 1:
-            return False
-        up = max(highs[i-breakout_lookback:i])
-        avg_range = sum((highs[j]-lows[j]) for j in range(max(1,i-20), i+1))/max(1,len(range(max(1,i-20), i+1)))
-        return closes[i] > up and (highs[i]-lows[i]) > avg_range
-
-    if strategy == "mean_reversion_zscore":
-        if i < 30:
-            return False
-        w = closes[i-20:i+1]
-        m = sum(w)/len(w)
-        var = sum((x-m)**2 for x in w)/len(w)
-        sd = var**0.5 if var>0 else 1e-9
-        z = (closes[i]-m)/sd
-        return z < -1.5 and rsi14[i] < 35
-
-    if strategy == "rsi_failure_structure":
-        if i < 10:
-            return False
-        prev_low = min(lows[i-5:i])
-        return rsi14[i] > rsi14[i-1] and closes[i] > prev_low and ema_fast[i] > ema_slow[i]
-
-    if strategy == "vwap_anchored_intraday":
-        if i < 10:
-            return False
-        v = 0.0
-        pv = 0.0
-        for j in range(max(0,i-20), i+1):
-            vol = max(0.0, (highs[j]-lows[j])) + 1e-6
-            tp = (highs[j]+lows[j]+closes[j])/3.0
-            pv += tp*vol
-            v += vol
-        vwap = pv/max(v,1e-9)
-        return closes[i] > vwap and ema_fast[i] > ema_slow[i]
-
-    if strategy == "funding_oi_reversal_pro":
-        # OI 대체 프록시: 급락 후 긴 꼬리 + RSI 과매도
-        body = abs(closes[i]-opens[i])
-        lower_wick = min(opens[i],closes[i]) - lows[i]
-        return rsi14[i] < 30 and lower_wick > body*1.5
-
-    if strategy == "adaptive_vol_target":
-        if i < 25:
-            return False
-        return ema_fast[i] > ema_slow[i] and rsi14[i] > 50
-
-
-    if strategy == "dual_momentum_trend":
-        if i < 30:
-            return False
         mom = (closes[i-20] - closes[i]) / max(closes[i-20],1e-9)
         return mom > 0.02 and ema_fast[i] < ema_slow[i]
 
@@ -499,6 +438,11 @@ def run_backtest(
     position_mode: str = "long",
     leverage: float = 1.0,
     maintenance_margin_rate: float = 0.005,
+    maker_fee_pct: Optional[float] = None,
+    taker_fee_pct: Optional[float] = None,
+    slippage_pct: float = 0.0,
+    strategy_by_bar: Optional[List[str]] = None,
+    size_by_strategy: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     if len(candles) < 80:
         return {"error": "not enough candles", "trades": [], "equity_curve": []}
@@ -523,6 +467,10 @@ def run_backtest(
     allow_short = position_mode in ["short", "both"]
     lev = max(1.0, float(leverage))
     mmr = max(0.0, min(0.2, float(maintenance_margin_rate)))
+    maker_fee = fee_pct if maker_fee_pct is None else max(0.0, float(maker_fee_pct))
+    taker_fee = fee_pct if taker_fee_pct is None else max(0.0, float(taker_fee_pct))
+    slippage = max(0.0, float(slippage_pct))
+    regime_sizes = size_by_strategy or {}
 
 
     def _vol_scale(idx:int)->float:
@@ -534,176 +482,146 @@ def run_backtest(
         scale=target/max(v,1e-6)
         return max(0.3,min(1.5,scale))
 
+    def _funding_cost(pos: Dict[str, Any], end_ts: int) -> float:
+        """Return signed funding cash outflow: positive is paid, negative received."""
+        notional = pos["entry"] * pos["qty"]
+        if funding_events:
+            rate_sum = sum(
+                float(ev["fundingRate"])
+                for ev in funding_events
+                if isinstance(ev.get("timestamp"), int)
+                and isinstance(ev.get("fundingRate"), (int, float))
+                and pos["entry_ts"] < ev["timestamp"] <= end_ts
+            )
+        else:
+            hold_hours = max(0.0, (end_ts - pos["entry_ts"]) / 1000.0 / 3600.0)
+            rate_sum = funding_rate_per_8h * (hold_hours / 8.0)
+        direction = 1.0 if pos["side"] == "long" else -1.0
+        return notional * rate_sum * direction
+
+    def _close_position(exit_price: float, exit_ts: int, exit_i: int, reason: str, apply_slippage: bool = True) -> None:
+        nonlocal usdt, position
+        assert position is not None
+        if apply_slippage:
+            exit_price *= 1 - slippage if position["side"] == "long" else 1 + slippage
+        gross = (
+            (exit_price - position["entry"]) * position["qty"]
+            if position["side"] == "long"
+            else (position["entry"] - exit_price) * position["qty"]
+        )
+        fees = (position["entry"] * position["qty"] + exit_price * position["qty"]) * taker_fee
+        funding_cost = _funding_cost(position, exit_ts)
+        pnl = gross - fees - funding_cost
+        usdt += pnl
+        trades.append({
+            "strategy": position["strategy"],
+            "side": position["side"],
+            "entry_ts": position["entry_ts"],
+            "exit_ts": exit_ts,
+            "entry": position["entry"],
+            "exit": exit_price,
+            "pnl": pnl,
+            "fees": fees,
+            "funding_fee": funding_cost,
+            "liq_price": position.get("liq_price"),
+            "reason": reason,
+            "balance": usdt,
+            "entry_i": position["entry_i"],
+            "signal_i": position["signal_i"],
+            "exit_i": exit_i,
+        })
+        position = None
+
+    def _open(side: str, selected: str, signal_i: int, execution_i: int, stop_pct: float, reward: float) -> None:
+        nonlocal position
+        raw_open = opens[execution_i]
+        entry = raw_open * (1 + slippage if side == "long" else 1 - slippage)
+        size_scale = max(0.0, float(regime_sizes.get(selected, 1.0)))
+        vol_scale = _vol_scale(signal_i) if selected == "adaptive_vol_target" else 1.0
+        qty = (usdt * 0.95 * lev * vol_scale * size_scale) / max(entry, 1e-9)
+        if side == "long":
+            sl, tp = entry * (1 - stop_pct), entry * (1 + reward)
+            liq_price = entry * (1 - max(0.0005, (1.0 / lev - mmr)))
+        else:
+            sl, tp = entry * (1 + stop_pct), entry * (1 - reward)
+            liq_price = entry * (1 + max(0.0005, (1.0 / lev - mmr)))
+        position = {
+            "strategy": selected,
+            "side": side,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "qty": qty,
+            "entry_ts": candles[execution_i][0],
+            "entry_i": execution_i,
+            "signal_i": signal_i,
+            "liq_price": liq_price,
+        }
+
     for i in range(1, len(candles)):
         ts, _, high, low, close, _ = candles[i]
+        signal_i = i - 1
+
+        if position is not None:
+            selected = position["strategy"]
+            signal_exit = (
+                _exit_signal(selected, signal_i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_upper)
+                if position["side"] == "long"
+                else _exit_signal_short(selected, signal_i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_lower)
+            )
+            if signal_exit:
+                _close_position(opens[i], ts, i, "signal")
+            elif position["side"] == "long":
+                if low <= position["liq_price"]:
+                    _close_position(position["liq_price"], ts, i, "liquidation")
+                elif low <= position["sl"]:
+                    _close_position(position["sl"], ts, i, "sl")
+                elif high >= position["tp"]:
+                    _close_position(position["tp"], ts, i, "tp")
+            else:
+                if high >= position["liq_price"]:
+                    _close_position(position["liq_price"], ts, i, "liquidation")
+                elif high >= position["sl"]:
+                    _close_position(position["sl"], ts, i, "sl")
+                elif low <= position["tp"]:
+                    _close_position(position["tp"], ts, i, "tp")
 
         if position is None:
+            selected = strategy_by_bar[signal_i] if strategy_by_bar and signal_i < len(strategy_by_bar) else strategy
             entered = False
-
-            # 전략 1: 추세 지속 (Trend Continuation)
-            if strategy == "trend_continuation_system":
-                if allow_long:
-                    cond_trend = ema_fast[i] > ema_slow[i]
-                    cond_pullback = abs(close - ema_fast[i]) / max(ema_fast[i], 1e-9) <= 0.01
-                    cond_rsi = 40 <= rsi14[i] <= 55
-                    avg_vol = sum(volumes[max(0, i-20):i+1]) / max(1, len(volumes[max(0, i-20):i+1]))
-                    cond_vol = volumes[i] >= avg_vol * 1.2
-                    if cond_trend and cond_pullback and cond_rsi and cond_vol:
-                        entry = close
-                        sl = entry * (1 - sl_pct)
-                        tp = entry * (1 + sl_pct * max(tp_rr, 3.0))
-                        qty = (usdt * 0.95 * lev * (_vol_scale(i) if strategy == "adaptive_vol_target" else 1.0)) / entry
-                        position = {"side": "long", "entry": entry, "sl": sl, "tp": tp, "qty": qty, "entry_ts": ts, "entry_i": i, "liq_price": entry * (1 - max(0.0005, (1.0/lev - mmr)))}
-                        entered = True
-
-                if (not entered) and allow_short:
-                    cond_trend = ema_fast[i] < ema_slow[i]
-                    cond_pullback = abs(close - ema_fast[i]) / max(ema_fast[i], 1e-9) <= 0.01
-                    cond_rsi = 45 <= rsi14[i] <= 60
-                    avg_vol = sum(volumes[max(0, i-20):i+1]) / max(1, len(volumes[max(0, i-20):i+1]))
-                    cond_vol = volumes[i] >= avg_vol * 1.2
-                    if cond_trend and cond_pullback and cond_rsi and cond_vol:
-                        entry = close
-                        sl = entry * (1 + sl_pct)
-                        tp = entry * (1 - sl_pct * max(tp_rr, 3.0))
-                        qty = (usdt * 0.95 * lev * (_vol_scale(i) if strategy == "adaptive_vol_target" else 1.0)) / entry
-                        position = {"side": "short", "entry": entry, "sl": sl, "tp": tp, "qty": qty, "entry_ts": ts, "entry_i": i, "liq_price": entry * (1 + max(0.0005, (1.0/lev - mmr)))}
-                        entered = True
-
-            # 전략 2: 청산 사냥 역추세 (Liquidation Reversal)
-            elif strategy == "liquidation_reversal_setup":
-                body = abs(close - opens[i])
-                lower_wick = min(opens[i], close) - lows[i]
-                upper_wick = highs[i] - max(opens[i], close)
-                avg_vol = sum(volumes[max(0, i-20):i+1]) / max(1, len(volumes[max(0, i-20):i+1]))
-                vol_spike = volumes[i] >= avg_vol * 1.3
-
-                if allow_long:
-                    cond = close > opens[i] and close > bb_lower[i] and lows[i] < bb_lower[i] and lower_wick > body * 1.5 and rsi14[i] < 45 and vol_spike
-                    if cond:
-                        entry = close
-                        sl = entry * (1 - min(sl_pct, 0.015))
-                        tp = entry * (1 + max(0.02, sl_pct * tp_rr))
-                        qty = (usdt * 0.95 * lev * (_vol_scale(i) if strategy == "adaptive_vol_target" else 1.0)) / entry
-                        position = {"side": "long", "entry": entry, "sl": sl, "tp": tp, "qty": qty, "entry_ts": ts, "entry_i": i, "liq_price": entry * (1 - max(0.0005, (1.0/lev - mmr)))}
-                        entered = True
-
-                if (not entered) and allow_short:
-                    cond = close < opens[i] and close < bb_upper[i] and highs[i] > bb_upper[i] and upper_wick > body * 1.5 and rsi14[i] > 55 and vol_spike
-                    if cond:
-                        entry = close
-                        sl = entry * (1 + min(sl_pct, 0.015))
-                        tp = entry * (1 - max(0.02, sl_pct * tp_rr))
-                        qty = (usdt * 0.95 * lev * (_vol_scale(i) if strategy == "adaptive_vol_target" else 1.0)) / entry
-                        position = {"side": "short", "entry": entry, "sl": sl, "tp": tp, "qty": qty, "entry_ts": ts, "entry_i": i, "liq_price": entry * (1 + max(0.0005, (1.0/lev - mmr)))}
-                        entered = True
-
+            if selected == "trend_continuation_system":
+                avg_vol = sum(volumes[max(0, signal_i - 20):signal_i + 1]) / max(1, len(volumes[max(0, signal_i - 20):signal_i + 1]))
+                if allow_long and ema_fast[signal_i] > ema_slow[signal_i] and abs(closes[signal_i] - ema_fast[signal_i]) / max(ema_fast[signal_i], 1e-9) <= 0.01 and 40 <= rsi14[signal_i] <= 55 and volumes[signal_i] >= avg_vol * 1.2:
+                    _open("long", selected, signal_i, i, sl_pct, sl_pct * max(tp_rr, 3.0)); entered = True
+                if not entered and allow_short and ema_fast[signal_i] < ema_slow[signal_i] and abs(closes[signal_i] - ema_fast[signal_i]) / max(ema_fast[signal_i], 1e-9) <= 0.01 and 45 <= rsi14[signal_i] <= 60 and volumes[signal_i] >= avg_vol * 1.2:
+                    _open("short", selected, signal_i, i, sl_pct, sl_pct * max(tp_rr, 3.0)); entered = True
+            elif selected == "liquidation_reversal_setup":
+                body = abs(closes[signal_i] - opens[signal_i])
+                lower_wick = min(opens[signal_i], closes[signal_i]) - lows[signal_i]
+                upper_wick = highs[signal_i] - max(opens[signal_i], closes[signal_i])
+                avg_vol = sum(volumes[max(0, signal_i - 20):signal_i + 1]) / max(1, len(volumes[max(0, signal_i - 20):signal_i + 1]))
+                spike = volumes[signal_i] >= avg_vol * 1.3
+                if allow_long and closes[signal_i] > opens[signal_i] and closes[signal_i] > bb_lower[signal_i] and lows[signal_i] < bb_lower[signal_i] and lower_wick > body * 1.5 and rsi14[signal_i] < 45 and spike:
+                    _open("long", selected, signal_i, i, min(sl_pct, 0.015), max(0.02, sl_pct * tp_rr)); entered = True
+                if not entered and allow_short and closes[signal_i] < opens[signal_i] and closes[signal_i] < bb_upper[signal_i] and highs[signal_i] > bb_upper[signal_i] and upper_wick > body * 1.5 and rsi14[signal_i] > 55 and spike:
+                    _open("short", selected, signal_i, i, min(sl_pct, 0.015), max(0.02, sl_pct * tp_rr)); entered = True
             else:
-                if allow_long and _entry_signal(strategy, i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_lower, breakout_lookback):
-                    entry = close
-                    sl = entry * (1 - sl_pct)
-                    tp = entry * (1 + sl_pct * tp_rr)
-                    qty = (usdt * 0.95 * lev * (_vol_scale(i) if strategy == "adaptive_vol_target" else 1.0)) / entry
-                    position = {
-                        "side": "long",
-                        "entry": entry,
-                        "sl": sl,
-                        "tp": tp,
-                        "qty": qty,
-                        "entry_ts": ts,
-                        "entry_i": i,
-                        "liq_price": entry * (1 - max(0.0005, (1.0/lev - mmr))),
-                    }
-                    entered = True
+                if allow_long and _entry_signal(selected, signal_i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_lower, breakout_lookback):
+                    _open("long", selected, signal_i, i, sl_pct, sl_pct * tp_rr); entered = True
+                if not entered and allow_short and _entry_signal_short(selected, signal_i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_upper, breakout_lookback):
+                    _open("short", selected, signal_i, i, sl_pct, sl_pct * tp_rr)
 
-                if (not entered) and allow_short and _entry_signal_short(strategy, i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_upper, breakout_lookback):
-                    entry = close
-                    sl = entry * (1 + sl_pct)
-                    tp = entry * (1 - sl_pct * tp_rr)
-                    qty = (usdt * 0.95 * lev * (_vol_scale(i) if strategy == "adaptive_vol_target" else 1.0)) / entry
-                    position = {
-                        "side": "short",
-                        "entry": entry,
-                        "sl": sl,
-                        "tp": tp,
-                        "qty": qty,
-                        "entry_ts": ts,
-                        "entry_i": i,
-                        "liq_price": entry * (1 + max(0.0005, (1.0/lev - mmr))),
-                    }
-        else:
-            exit_price = None
-            reason = None
+        mark_equity = usdt
+        if position is not None:
+            gross = ((close - position["entry"]) if position["side"] == "long" else (position["entry"] - close)) * position["qty"]
+            estimated_exit_fee = (position["entry"] + close) * position["qty"] * taker_fee
+            mark_equity += gross - estimated_exit_fee - _funding_cost(position, ts)
+        equity.append({"ts": ts, "equity": mark_equity})
 
-            if position["side"] == "long":
-                if low <= position.get("liq_price", -1):
-                    exit_price = position.get("liq_price")
-                    reason = "liquidation"
-                elif low <= position["sl"]:
-                    exit_price = position["sl"]
-                    reason = "sl"
-                elif high >= position["tp"]:
-                    exit_price = position["tp"]
-                    reason = "tp"
-                elif _exit_signal(strategy, i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_upper):
-                    exit_price = close
-                    reason = "signal"
-            else:
-                if high >= position.get("liq_price", 10**18):
-                    exit_price = position.get("liq_price")
-                    reason = "liquidation"
-                elif high >= position["sl"]:
-                    exit_price = position["sl"]
-                    reason = "sl"
-                elif low <= position["tp"]:
-                    exit_price = position["tp"]
-                    reason = "tp"
-                elif _exit_signal_short(strategy, i, opens, closes, highs, lows, ema_fast, ema_slow, rsi14, rsi_lower):
-                    exit_price = close
-                    reason = "signal"
-
-            if exit_price is not None:
-                if position["side"] == "long":
-                    gross = (exit_price - position["entry"]) * position["qty"]
-                else:
-                    gross = (position["entry"] - exit_price) * position["qty"]
-                fees = (position["entry"] * position["qty"] + exit_price * position["qty"]) * fee_pct
-
-                hold_hours = max(0.0, (ts - position["entry_ts"]) / 1000.0 / 3600.0)
-                funding_periods = hold_hours / 8.0
-                notional = position["entry"] * position["qty"]
-
-                if funding_events:
-                    rate_sum = 0.0
-                    for ev in funding_events:
-                        ev_ts = ev.get("timestamp")
-                        ev_rate = ev.get("fundingRate")
-                        if isinstance(ev_ts, int) and isinstance(ev_rate, (int, float)) and position["entry_ts"] < ev_ts <= ts:
-                            rate_sum += float(ev_rate)
-                    funding_fee = notional * rate_sum
-                else:
-                    funding_fee = notional * funding_rate_per_8h * funding_periods
-
-                pnl = gross - fees - funding_fee
-                usdt += pnl
-                trades.append({
-                    "strategy": strategy,
-                    "side": position.get("side", "long"),
-                    "entry_ts": position["entry_ts"],
-                    "exit_ts": ts,
-                    "entry": position["entry"],
-                    "exit": exit_price,
-                    "pnl": pnl,
-                    "funding_fee": funding_fee,
-                    "liq_price": position.get("liq_price"),
-                    "reason": reason,
-                    "balance": usdt,
-                    "entry_i": position["entry_i"],
-                    "exit_i": i,
-                })
-                position = None
-
-        equity.append({"ts": ts, "equity": usdt})
+    if position is not None:
+        final_ts = candles[-1][0]
+        _close_position(closes[-1], final_ts, len(candles) - 1, "end_of_test")
+        equity[-1] = {"ts": final_ts, "equity": usdt}
 
     wins = len([t for t in trades if t["pnl"] > 0])
     total = len(trades)
@@ -737,6 +655,7 @@ def run_backtest(
         "max_drawdown_pct": max_dd,
         "liquidation_count": liquidation_count,
         "equity_curve": equity,
+        "fee_model": {"maker_fee_pct": maker_fee, "taker_fee_pct": taker_fee, "slippage_pct": slippage},
     }
 
 
@@ -760,21 +679,18 @@ def run_ensemble_backtest(
     ema60 = _ema(closes, 60)
     rsi14 = _rsi(closes, 14)
 
-    trend_candles = []
-    rev_candles = []
-    base_candles = []
-
+    regimes: List[str] = []
     for i, c in enumerate(candles):
         if i < 60:
-            base_candles.append(c)
+            regimes.append("ema_cross")
             continue
         spread = abs(ema20[i] - ema60[i]) / max(ema60[i], 1e-9)
         if spread >= trend_spread_threshold:
-            trend_candles.append(c)
+            regimes.append("trend_continuation_system")
         elif rsi14[i] <= reversal_rsi_low or rsi14[i] >= reversal_rsi_high:
-            rev_candles.append(c)
+            regimes.append("liquidation_reversal_setup")
         else:
-            base_candles.append(c)
+            regimes.append("ema_cross")
 
     raw_weights = {
         "trend_continuation_system": max(0.0, trend_weight),
@@ -788,51 +704,29 @@ def run_ensemble_backtest(
 
     norm_weights = {k: v / wsum for k, v in raw_weights.items()}
 
-    parts = []
-    datasets = {
-        "trend_continuation_system": trend_candles,
-        "liquidation_reversal_setup": rev_candles,
-        "ema_cross": base_candles,
-    }
-
-    for name, sub in datasets.items():
-        if len(sub) < 80:
-            continue
-        r = run_backtest(
-            sub,
-            strategy=name,
-            initial_usdt=initial_usdt,
-            position_mode=position_mode,
-            leverage=leverage,
-            funding_rate_per_8h=funding_rate_per_8h,
-            funding_events=funding_events,
-        )
-        parts.append((norm_weights.get(name, 0.0), r))
-
-    if not parts:
-        return {"error": "not enough candles for ensemble"}
-
-    final_usdt = sum(w * p.get("final_usdt", initial_usdt) for w, p in parts)
-    ret_pct = ((final_usdt - initial_usdt) / initial_usdt) * 100.0
-    total_trades = sum(int(p.get("total_trades", 0)) for _, p in parts)
-    liq = sum(int(p.get("liquidation_count", 0)) for _, p in parts)
-    pf = sum(float(w) * float(p.get("profit_factor", 0.0)) for w, p in parts)
-    mdd = sum(float(w) * float(p.get("max_drawdown_pct", 0.0)) for w, p in parts)
-
-    return {
-        "strategy": "ensemble_regime",
-        "initial_usdt": initial_usdt,
-        "final_usdt": final_usdt,
-        "return_pct": ret_pct,
-        "total_trades": total_trades,
-        "liquidation_count": liq,
-        "parts": [{"weight": w, "strategy": p.get("strategy"), "return_pct": p.get("return_pct", 0.0)} for w, p in parts],
-        "win_rate": 0.0,
-        "profit_factor": pf,
-        "max_drawdown_pct": mdd,
-        "trades": [],
-        "equity_curve": [],
-    }
+    result = run_backtest(
+        candles,
+        strategy="ensemble_regime",
+        initial_usdt=initial_usdt,
+        position_mode=position_mode,
+        leverage=leverage,
+        funding_rate_per_8h=funding_rate_per_8h,
+        funding_events=funding_events,
+        strategy_by_bar=regimes,
+        size_by_strategy=norm_weights,
+    )
+    result["strategy"] = "ensemble_regime"
+    result["regime_by_bar"] = regimes
+    result["parts"] = [
+        {
+            "strategy": name,
+            "weight": weight,
+            "bars": regimes.count(name),
+            "trades": len([trade for trade in result.get("trades", []) if trade.get("strategy") == name]),
+        }
+        for name, weight in norm_weights.items()
+    ]
+    return result
 
 
 def optimize_ensemble(
