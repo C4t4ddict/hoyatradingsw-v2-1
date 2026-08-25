@@ -3,15 +3,16 @@ import os
 import urllib.parse
 import urllib.request
 from typing import Optional
+from security import resolve_secret
 
 
 def _telegram_config(channel: str = "default"):
     if channel == "paper":
-        token = os.getenv("PAPER_ALERT_TELEGRAM_BOT_TOKEN", "").strip() or os.getenv("ALERT_TELEGRAM_BOT_TOKEN", "").strip()
-        chat_id = os.getenv("PAPER_ALERT_TELEGRAM_CHAT_ID", "").strip() or os.getenv("ALERT_TELEGRAM_CHAT_ID", "").strip()
+        token = resolve_secret("PAPER_ALERT_TELEGRAM_BOT_TOKEN").strip() or resolve_secret("ALERT_TELEGRAM_BOT_TOKEN").strip()
+        chat_id = resolve_secret("PAPER_ALERT_TELEGRAM_CHAT_ID").strip() or resolve_secret("ALERT_TELEGRAM_CHAT_ID").strip()
     else:
-        token = os.getenv("ALERT_TELEGRAM_BOT_TOKEN", "").strip()
-        chat_id = os.getenv("ALERT_TELEGRAM_CHAT_ID", "").strip()
+        token = resolve_secret("ALERT_TELEGRAM_BOT_TOKEN").strip()
+        chat_id = resolve_secret("ALERT_TELEGRAM_CHAT_ID").strip()
     return token, chat_id
 
 

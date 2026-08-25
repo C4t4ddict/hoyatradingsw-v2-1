@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from backend.app.services.paper_service import create_ledger_backup, create_ledger_export, get_paper_payload, start_paper, pause_paper, reset_paper, restore_ledger_backup, update_paper_config, get_paper_audit, get_paper_strategy, get_paper_events
+from backend.app.routes.security import _authorize_settings
 
 router = APIRouter()
 
@@ -61,17 +62,20 @@ def api_paper_events(limit: int = 200):
 
 
 @router.post('/api/paper/ledger/backup')
-def api_paper_ledger_backup():
+def api_paper_ledger_backup(x_settings_token: Optional[str] = Header(default=None)):
+    _authorize_settings(x_settings_token)
     return create_ledger_backup()
 
 
 @router.post('/api/paper/ledger/export')
-def api_paper_ledger_export():
+def api_paper_ledger_export(x_settings_token: Optional[str] = Header(default=None)):
+    _authorize_settings(x_settings_token)
     return create_ledger_export()
 
 
 @router.post('/api/paper/ledger/restore')
-def api_paper_ledger_restore(body: LedgerRestoreRequest):
+def api_paper_ledger_restore(body: LedgerRestoreRequest, x_settings_token: Optional[str] = Header(default=None)):
+    _authorize_settings(x_settings_token)
     try:
         return restore_ledger_backup(body.backup_name)
     except (ValueError, FileNotFoundError) as exc:

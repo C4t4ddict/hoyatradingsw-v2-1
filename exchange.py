@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict, List
 
 import ccxt
+from security import mask_text, resolve_secret
 
 
 def _normalize_market_type(market_type: str) -> str:
@@ -15,8 +16,8 @@ def _normalize_market_type(market_type: str) -> str:
 
 def get_exchange(read_only: bool = False, market_type: str = ""):
     ex_name = os.getenv("EXCHANGE", "binance")
-    key = os.getenv("API_KEY", "")
-    secret = os.getenv("API_SECRET", "")
+    key = resolve_secret("API_KEY")
+    secret = resolve_secret("API_SECRET")
 
     ex_class = getattr(ccxt, ex_name)
     default_type = _normalize_market_type(market_type)
@@ -82,7 +83,7 @@ def fetch_account_status(exchange) -> Dict[str, Any]:
             "usdt_used": usdt_used,
         }
     except Exception as e:
-        status["balance_error"] = str(e)
+        status["balance_error"] = mask_text(str(e))
 
     try:
         if hasattr(exchange, "fetch_positions"):
@@ -102,7 +103,7 @@ def fetch_account_status(exchange) -> Dict[str, Any]:
                 })
             status["positions"] = keep
     except Exception as e:
-        status["positions_error"] = str(e)
+        status["positions_error"] = mask_text(str(e))
 
     try:
         open_orders = exchange.fetch_open_orders()
@@ -115,7 +116,7 @@ def fetch_account_status(exchange) -> Dict[str, Any]:
             "status": o.get("status"),
         } for o in open_orders]
     except Exception as e:
-        status["open_orders_error"] = str(e)
+        status["open_orders_error"] = mask_text(str(e))
 
     return status
 

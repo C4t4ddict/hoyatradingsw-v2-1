@@ -7,6 +7,7 @@ const navItems = [
   { href: '/intel', label: 'Market Intel' },
   { href: '/paper', label: 'Paper Trading' },
   { href: '/risk', label: 'Risk Control' },
+  { href: '/operations', label: 'Operations' },
   { href: '/account', label: 'Account' },
 ]
 
