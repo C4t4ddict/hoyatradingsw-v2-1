@@ -1,5 +1,7 @@
 import time
+import traceback
 from paper_live import load_state, update_session
+from operations import emit_operational_alert, get_store
 
 
 def main():
@@ -12,8 +14,18 @@ def main():
         interval = max(5, min(300, interval))
         try:
             update_session()
-        except Exception:
-            pass
+            get_store().resolve("paper.worker.exception")
+        except Exception as exc:
+            try:
+                emit_operational_alert(
+                    dedup_key="paper.worker.exception",
+                    category="worker",
+                    severity="critical",
+                    message="Paper worker update failed",
+                    details={"error_type": type(exc).__name__, "error": str(exc), "traceback": traceback.format_exc(limit=5)},
+                )
+            except Exception:
+                pass
         time.sleep(interval)
 
 
