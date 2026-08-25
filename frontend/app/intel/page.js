@@ -44,6 +44,10 @@ export default async function IntelPage(){
   const ml = data?.ml_signal || {}
   const s = ml?.scores || {}
   const d = ml?.decision || {}
+  const quality = data?.signal_quality || ml?.quality_policy || {}
+  const qualityWeights = quality?.weights || {}
+  const intelQuality = quality?.intel_quality || {}
+  const mlQuality = quality?.ml_quality || {}
   const collection = b.collection_status || {}
   const bestLong = [...rows].sort((a,b)=>(b.long_event_score||0)-(a.long_event_score||0))[0]
   const bestShort = [...rows].sort((a,b)=>(b.short_event_score||0)-(a.short_event_score||0))[0]
@@ -72,6 +76,22 @@ export default async function IntelPage(){
         <div style={{fontWeight:800, marginBottom:8}}>{bestLong ? trTitle(bestLong.title) : '-'}</div>
         <div className="metric-note">{bestLong ? `${shortSource(bestLong.source)} · ${trTopic(bestLong.topic)}` : '-'}</div>
         <div style={{marginTop:14}} className="chip good">L {fmt(bestLong?.long_event_score)}</div>
+      </div>
+
+      <div className="card span-12">
+        <div className="split">
+          <div>
+            <div className="section-title">Signal Quality Gate</div>
+            <div className="section-sub">실현 결과가 충분히 쌓이고 정확도·보정 기준을 통과한 신호만 실제 판단에 반영한다.</div>
+          </div>
+          <div className={`chip ${quality.signals_enabled ? 'good' : 'warn'}`}>{quality.signals_enabled ? 'VALIDATED' : 'OBSERVATION MODE'}</div>
+        </div>
+        <div className="mini-grid" style={{marginTop:14}}>
+          <div><div className="metric-label">Intel Weight</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(qualityWeights.intel||0)*100)}%</div><div className="metric-note">{intelQuality.observations||0} observations · Brier {fmt(intelQuality.brier_score)}</div></div>
+          <div><div className="metric-label">ML Weight</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(qualityWeights.ml||0)*100)}%</div><div className="metric-note">{mlQuality.observations||0} observations · Brier {fmt(mlQuality.brier_score)}</div></div>
+          <div><div className="metric-label">Position Multiplier</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(d.position_size_multiplier||0)*100)}%</div><div className="metric-note">시장 국면을 반영한 허용 노출</div></div>
+          <div><div className="metric-label">Decision Source</div><div className="metric-value" style={{fontSize:22}}>{(d.trigger_source||'quality_gate').toUpperCase()}</div><div className="metric-note">검증 전에는 자동으로 neutral 유지</div></div>
+        </div>
       </div>
 
       <div className="card span-4">

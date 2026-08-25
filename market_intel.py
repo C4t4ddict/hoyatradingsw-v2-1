@@ -12,6 +12,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import feedparser
+from signal_quality import SignalQualityStore, deduplicate_events, weight_events_by_source
 
 CACHE_PATH = Path(os.getenv("MARKET_INTEL_CACHE_PATH", "data/market_intel_cache.json"))
 CACHE_TTL_SEC = int(os.getenv("MARKET_INTEL_CACHE_TTL_SEC", "300"))
@@ -228,6 +229,8 @@ def summarize_market(rows: List[Dict]) -> Dict:
     if not rows:
         return {
             "score": 0.0,
+            "long_score": 0.0,
+            "short_score": 0.0,
             "bias": "neutral",
             "confidence": 0.0,
             "count": 0,
@@ -239,6 +242,8 @@ def summarize_market(rows: List[Dict]) -> Dict:
         }
 
     score = sum(float(r.get("score", 0.0)) for r in rows)
+    long_score = sum(max(0.0, float(r.get("score", 0.0))) for r in rows)
+    short_score = sum(max(0.0, -float(r.get("score", 0.0))) for r in rows)
     confidence = min(1.0, (sum(float(r.get("trust", 0.0)) for r in rows) / max(1, len(rows))))
     bias = "bullish" if score > 1.2 else ("bearish" if score < -1.2 else "neutral")
     count_news = sum(1 for r in rows if r.get("kind") == "news")
@@ -258,6 +263,8 @@ def summarize_market(rows: List[Dict]) -> Dict:
 
     return {
         "score": round(score, 4),
+        "long_score": round(long_score, 4),
+        "short_score": round(short_score, 4),
         "bias": bias,
         "confidence": round(confidence, 4),
         "count": len(rows),
@@ -294,7 +301,12 @@ def get_market_brief(force_refresh: bool = False) -> Dict:
             stale_cache = None
 
     collection = _fetch_items_result(per_source=8)
-    rows = collection["rows"]
+    rows = deduplicate_events(collection["rows"])
+    try:
+        quality_store = SignalQualityStore(os.getenv("SIGNAL_QUALITY_PATH", "data/signal_quality.sqlite3"))
+        rows = weight_events_by_source(rows, quality_store.source_reliability())
+    except Exception:
+        pass
     if not rows and stale_cache:
         stale_cache.pop("_cached_at", None)
         stale_cache["collection_status"] = {**collection["status"], "fallback": "stale_cache"}

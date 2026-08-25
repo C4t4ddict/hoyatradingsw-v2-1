@@ -61,6 +61,7 @@ export default function PaperPage(){
   const decision=data?.strategy_decision||{}
   const targets=decision?.target_weights||{}
   const riskStatus=data?.risk_status||{}
+  const marketRegime=data?.market_regime||{}
   const orderEvents=data?.order_events||[]
   const runningState = data?.running ? 'RUN' : (data?.paused ? 'PAUSE':'STOP')
   const latestTradePnlClass = Number(latestTrade?.pnl || 0) >= 0 ? 'good' : 'bad'
@@ -212,6 +213,9 @@ export default function PaperPage(){
         <div className="metric-label" style={{marginTop:12}}>Pending Orders</div>
         <div className="metric-value mono" style={{fontSize:26}}>{riskStatus.pending_count||0}</div>
         <div className="section-sub">{(riskStatus.rejected||[]).join(', ')||'현재 데이터·손실·스프레드 차단 사유 없음'}</div>
+        <div className="metric-label" style={{marginTop:16}}>Market Regime</div>
+        <div className="metric-value" style={{fontSize:22}}>{(marketRegime.direction||'unknown').toUpperCase()} / {(marketRegime.volatility||'unknown').toUpperCase()}</div>
+        <div className="metric-note">노출 배수 {fmt(Number(marketRegime.exposure_multiplier||0)*100,'%')} · {(marketRegime.reasons||[]).join(', ')||'감축 사유 없음'}</div>
       </div>
 
       <div className="card span-12">

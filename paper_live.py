@@ -14,6 +14,7 @@ from notifier import send_telegram
 from market_intel import get_market_brief
 from paper_engine import FOUR_HOURS_MS, EventDrivenPaperEngine, RiskPolicy, VolTargetMomentumStrategy
 from paper_ledger import TradingLedger
+from signal_quality import analyze_market_regime
 try:
     from app.services.ml_signal_service import build_signal_summary
 except Exception:
@@ -251,6 +252,7 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "strategy_decision": state.get("strategy_decision"),
         "order_events": state.get("order_events"),
         "risk_status": state.get("risk_status"),
+        "market_regime": state.get("market_regime"),
     }
 
 
@@ -585,7 +587,20 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
         histories[symbol] = [row for row in candles if int(row[0]) + FOUR_HOURS_MS <= now_ms]
 
     ledger = TradingLedger(LEDGER_PATH)
-    strategy = VolTargetMomentumStrategy(target_volatility=float(cfg.get("target_volatility", 0.20)))
+    btc_history = histories.get("BTC/USDT") or []
+    eth_history = histories.get("ETH/USDT") or []
+    eth_returns = [float(eth_history[index][4]) / float(eth_history[index - 1][4]) - 1.0 for index in range(1, len(eth_history))]
+    regime = analyze_market_regime(
+        [float(row[4]) for row in btc_history],
+        volumes=[float(row[5]) for row in btc_history],
+        funding_rate=0.0,
+        alt_returns=eth_returns,
+    )
+    state["market_regime"] = regime
+    strategy = VolTargetMomentumStrategy(
+        target_volatility=float(cfg.get("target_volatility", 0.20)),
+        exposure_multiplier=float(regime.get("exposure_multiplier", 0.0)),
+    )
     policy = RiskPolicy(
         daily_loss_limit_pct=float(cfg.get("daily_loss_limit_pct", 0.02)),
         reduce_risk_drawdown_pct=float(cfg.get("reduce_risk_drawdown_pct", 0.10)),
