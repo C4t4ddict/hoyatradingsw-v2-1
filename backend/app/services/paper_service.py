@@ -6,7 +6,7 @@ from backend.app.services.ml_signal_service import build_signal_summary
 def get_paper_payload():
     state = load_paper_state()
     latest_event = ((get_market_brief(force_refresh=False).get('top') or [{}])[0])
-    ml_signal = build_signal_summary(latest_event, get_market_brief(force_refresh=False)) if latest_event else {}
+    ml_signal = build_signal_summary(latest_event, get_market_brief(force_refresh=False), regime=state.get('market_regime')) if latest_event else {}
     return {
         'running': state.get('running'),
         'paused': state.get('paused'),
@@ -23,6 +23,7 @@ def get_paper_payload():
         'risk_status': state.get('risk_status'),
         'order_events': state.get('order_events') or [],
         'pending_orders': ((state.get('event_engine') or {}).get('pending_orders') or []),
+        'market_regime': state.get('market_regime'),
     }
 
 

@@ -69,12 +69,14 @@ class VolTargetMomentumStrategy:
         momentum_bars: int = 540,
         volatility_bars: int = 180,
         target_volatility: float = 0.20,
+        exposure_multiplier: float = 1.0,
     ):
         self.base_weights = dict(base_weights or DEFAULT_BASE_WEIGHTS)
         self.ema_bars = int(ema_bars)
         self.momentum_bars = int(momentum_bars)
         self.volatility_bars = int(volatility_bars)
         self.target_volatility = min(max(float(target_volatility), 0.01), 0.25)
+        self.exposure_multiplier = min(max(float(exposure_multiplier), 0.0), 1.0)
 
     def evaluate(self, histories: Dict[str, List[List[float]]], as_of_ms: int) -> StrategyDecision:
         targets: Dict[str, float] = {}
@@ -100,7 +102,7 @@ class VolTargetMomentumStrategy:
             realized_vol = _annualized_volatility(closes, self.volatility_bars)
             active = closes[-1] > ema_value and momentum > 0.0
             scale = min(1.0, self.target_volatility / max(realized_vol, 1e-9)) if active else 0.0
-            target = max(0.0, float(base_weight) * scale)
+            target = max(0.0, float(base_weight) * scale * self.exposure_multiplier)
             targets[symbol] = target
             signals[symbol] = {
                 "active": active,
@@ -110,6 +112,7 @@ class VolTargetMomentumStrategy:
                 "realized_volatility": realized_vol,
                 "volatility_scale": scale,
                 "target_weight": target,
+                "regime_exposure_multiplier": self.exposure_multiplier,
                 "bar_timestamp_ms": timestamps[-1],
             }
 

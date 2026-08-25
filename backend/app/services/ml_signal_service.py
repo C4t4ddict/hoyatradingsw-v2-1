@@ -1,7 +1,10 @@
+import os
+
 from predict_model_bidirectional import positive_probability, predict_event_bidirectional
+from signal_quality import SignalQualityStore, derive_signal_policy
 
 
-def build_signal_summary(event: dict, market_brief: dict = None) -> dict:
+def build_signal_summary(event: dict, market_brief: dict = None, quality_store: SignalQualityStore = None, regime: dict = None) -> dict:
     predictions = predict_event_bidirectional(event) if event else {}
     probability = {
         target: positive_probability(predictions.get(target))
@@ -30,8 +33,13 @@ def build_signal_summary(event: dict, market_brief: dict = None) -> dict:
 
     intel_long = float((market_brief or {}).get("long_score", 0.0))
     intel_short = float((market_brief or {}).get("short_score", 0.0))
-    long_score = intel_long * 0.75 + ml_long_score * 0.25
-    short_score = intel_short * 0.75 + ml_short_score * 0.25
+    store = quality_store or SignalQualityStore(os.getenv("SIGNAL_QUALITY_PATH", "data/signal_quality.sqlite3"))
+    policy = derive_signal_policy(store.summary("intel"), store.summary("ml"), regime=regime)
+    intel_weight = policy["weights"]["intel"]
+    ml_weight = policy["weights"]["ml"]
+    exposure = policy["exposure_multiplier"]
+    long_score = (intel_long * intel_weight + ml_long_score * ml_weight) * exposure
+    short_score = (intel_short * intel_weight + ml_short_score * ml_weight) * exposure
 
     intel_long_trigger = intel_long >= 6.0 and intel_long > intel_short + 1.5
     intel_short_trigger = intel_short >= 6.0 and intel_short > intel_long + 1.5
@@ -46,13 +54,15 @@ def build_signal_summary(event: dict, market_brief: dict = None) -> dict:
         and probability["label_up_5m"] <= 0.35
     )
 
-    if intel_short_trigger:
+    if not policy["signals_enabled"]:
+        bias, strength, trigger_source = "neutral", 0.0, "quality_gate"
+    elif intel_short_trigger and intel_weight > 0:
         bias, strength, trigger_source = "short", short_score, "live_intel"
-    elif intel_long_trigger:
+    elif intel_long_trigger and intel_weight > 0:
         bias, strength, trigger_source = "long", long_score, "live_intel"
-    elif ml_short_trigger and short_score > long_score + 0.20:
+    elif ml_short_trigger and ml_weight > 0 and short_score > long_score + 0.20:
         bias, strength, trigger_source = "short", short_score, "ml"
-    elif ml_long_trigger and long_score > short_score + 0.20:
+    elif ml_long_trigger and ml_weight > 0 and long_score > short_score + 0.20:
         bias, strength, trigger_source = "long", long_score, "ml"
     elif long_score > short_score + 0.75:
         bias, strength, trigger_source = "lean_long", long_score, "combined"
@@ -87,8 +97,10 @@ def build_signal_summary(event: dict, market_brief: dict = None) -> dict:
         "decision": {
             "bias": bias,
             "strength": round(strength, 4),
-            "long_trigger": bool(intel_long_trigger or ml_long_trigger),
-            "short_trigger": bool(intel_short_trigger or ml_short_trigger),
+            "long_trigger": bool(policy["signals_enabled"] and ((intel_long_trigger and intel_weight > 0) or (ml_long_trigger and ml_weight > 0))),
+            "short_trigger": bool(policy["signals_enabled"] and ((intel_short_trigger and intel_weight > 0) or (ml_short_trigger and ml_weight > 0))),
             "trigger_source": trigger_source,
+            "position_size_multiplier": exposure,
         },
+        "quality_policy": policy,
     }
