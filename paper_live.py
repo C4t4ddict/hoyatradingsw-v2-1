@@ -15,6 +15,7 @@ from market_intel import get_market_brief
 from paper_engine import FOUR_HOURS_MS, EventDrivenPaperEngine, RiskPolicy, VolTargetMomentumStrategy
 from paper_ledger import TradingLedger
 from signal_quality import analyze_market_regime
+from operations import sync_paper_operational_events
 try:
     from app.services.ml_signal_service import build_signal_summary
 except Exception:
@@ -354,6 +355,7 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "risk_status": state.get("risk_status"),
         "market_regime": state.get("market_regime"),
         "reconciliation": state.get("reconciliation"),
+        "ops_seen_event_keys": state.get("ops_seen_event_keys"),
     }
 
 
@@ -827,6 +829,10 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
     state["fallback_mode"] = None if (outcome.get("decision") or {}).get("data_quality", {}).get("ok") else "data_quality_hold"
     state["last_update"] = _now_iso()
     state["consistency"] = _build_consistency_report(state)
+    try:
+        sync_paper_operational_events(state)
+    except Exception:
+        pass
     _append_checkpoint(state)
     save_state(state, path)
     _persist_session_snapshot(state)
@@ -1032,6 +1038,10 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     if not state['consistency'].get('ok'):
         note = (state.get('result') or {}).get('note') or ''
         state['result']['note'] = (f"{note} | consistency warning").strip(' |')
+    try:
+        sync_paper_operational_events(state)
+    except Exception:
+        pass
     _append_checkpoint(state)
     save_state(state, path)
     _persist_session_snapshot(state)
