@@ -1,4 +1,6 @@
-from paper_live import load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, reset_session as reset_paper_session, stop_background_worker, get_audit_payload as get_paper_audit_payload, get_strategy_payload, get_ledger_events
+import os
+
+from paper_live import BACKUP_DIR, backup_ledger, export_ledger_csv, load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, reset_session as reset_paper_session, restore_ledger, stop_background_worker, get_audit_payload as get_paper_audit_payload, get_strategy_payload, get_ledger_events
 from market_intel import get_market_brief
 from backend.app.services.ml_signal_service import build_signal_summary
 
@@ -88,3 +90,18 @@ def get_paper_strategy():
 
 def get_paper_events(limit: int = 200):
     return get_ledger_events(limit=limit)
+
+
+def create_ledger_backup():
+    return backup_ledger()
+
+
+def create_ledger_export():
+    return export_ledger_csv()
+
+
+def restore_ledger_backup(backup_name: str):
+    safe_name = os.path.basename(backup_name)
+    if safe_name != backup_name or not safe_name.endswith(".sqlite3"):
+        raise ValueError("invalid backup name")
+    return restore_ledger(os.path.join(BACKUP_DIR, safe_name))

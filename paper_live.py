@@ -26,6 +26,106 @@ LOCK_PATH = os.getenv("PAPER_LIVE_LOCK_PATH", "data/paper_live_worker.lock")
 
 SESSION_DIR = os.getenv("PAPER_LIVE_SESSION_DIR", "data/paper_sessions")
 LEDGER_PATH = os.getenv("TRADING_LEDGER_PATH", "data/trading_ledger.sqlite3")
+BACKUP_DIR = os.getenv("TRADING_LEDGER_BACKUP_DIR", "data/backups")
+
+
+def _code_version() -> str:
+    configured = os.getenv("HOYA_CODE_VERSION", "").strip()
+    if configured:
+        return configured
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            text=True,
+            timeout=2,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _config_hash(config: Dict[str, Any]) -> str:
+    encoded = json.dumps(config or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _append_session_event(state: Dict[str, Any], event_type: str, payload: Dict[str, Any], event_suffix: str) -> bool:
+    session_id = state.get("session_id")
+    if not session_id:
+        return False
+    return TradingLedger(LEDGER_PATH).append_event(
+        event_id=hashlib.sha256(f"{session_id}|{event_suffix}".encode("utf-8")).hexdigest(),
+        session_id=session_id,
+        event_type=event_type,
+        payload=payload,
+        environment="paper",
+        strategy_version=f"{state.get('executed_strategy') or (state.get('config') or {}).get('strategy') or 'unknown'}@{_code_version()}",
+    )
+
+
+def _append_checkpoint(state: Dict[str, Any]) -> None:
+    checkpoint_at = state.get("last_update") or _now_iso()
+    _append_session_event(
+        state,
+        "session_checkpoint",
+        {
+            "checkpoint_at": checkpoint_at,
+            "event_engine": state.get("event_engine"),
+            "metrics": state.get("metrics"),
+            "config_hash": _config_hash(state.get("config") or {}),
+        },
+        f"checkpoint|{checkpoint_at}",
+    )
+
+
+def reconcile_session_state(state: Dict[str, Any], ledger: TradingLedger = None) -> Dict[str, Any]:
+    """Recover the latest durable engine checkpoint and report ledger mismatches."""
+    session_id = state.get("session_id")
+    if not session_id:
+        state["reconciliation"] = {"ok": True, "status": "no_session"}
+        return state
+    ledger = ledger or TradingLedger(LEDGER_PATH)
+    integrity = ledger.verify_integrity(session_id=session_id)
+    events = ledger.list_events(session_id=session_id, limit=5000)
+    checkpoints = [event for event in events if event["event_type"] == "session_checkpoint"]
+    recovered = False
+    if checkpoints:
+        latest = checkpoints[0]["payload"]
+        checkpoint_engine = latest.get("event_engine")
+        if checkpoint_engine and not state.get("event_engine"):
+            state["event_engine"] = checkpoint_engine
+            recovered = True
+        checkpoint_metrics = latest.get("metrics")
+        if checkpoint_metrics and not state.get("metrics"):
+            state["metrics"] = checkpoint_metrics
+            recovered = True
+
+    pending_events = {
+        event["payload"].get("order_id"): event["payload"]
+        for event in events if event["event_type"] == "order_pending"
+    }
+    terminal_order_ids = {
+        event["payload"].get("order_id")
+        for event in events if event["event_type"] in {"order_filled", "order_cancelled"}
+    }
+    ledger_pending = {key: value for key, value in pending_events.items() if key and key not in terminal_order_ids}
+    engine = state.get("event_engine") or {}
+    snapshot_pending = {row.get("order_id"): row for row in engine.get("pending_orders") or []}
+    mismatch = set(ledger_pending) != set(snapshot_pending)
+    if mismatch:
+        engine["pending_orders"] = list(ledger_pending.values())
+        state["event_engine"] = engine
+        recovered = True
+    state["reconciliation"] = {
+        "ok": integrity["ok"],
+        "integrity": integrity,
+        "pending_order_mismatch": mismatch,
+        "ledger_pending_count": len(ledger_pending),
+        "snapshot_pending_count": len(snapshot_pending),
+        "recovered": recovered,
+    }
+    return state
 
 
 def _session_paths(session_id: str):
@@ -253,6 +353,7 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "order_events": state.get("order_events"),
         "risk_status": state.get("risk_status"),
         "market_regime": state.get("market_regime"),
+        "reconciliation": state.get("reconciliation"),
     }
 
 
@@ -376,6 +477,13 @@ def start_session(config: Dict[str, Any], path: str = STATE_PATH):
         "seen_trade_ids": [],
         "config_snapshot": dict(config),
     }
+    _append_session_event(
+        state,
+        "session_started",
+        {"config": config, "config_hash": _config_hash(config), "code_version": _code_version()},
+        "session_started",
+    )
+    _append_checkpoint(state)
     save_state(state, path)
     _persist_session_snapshot(state)
     pid = start_background_worker()
@@ -390,6 +498,8 @@ def pause_session(path: str = STATE_PATH):
     state = load_state(path)
     state["running"] = False
     state["paused"] = True
+    paused_at = _now_iso()
+    _append_session_event(state, "session_paused", {"paused_at": paused_at}, f"paused|{paused_at}")
     save_state(state, path)
     _persist_session_snapshot(state)
     stop_background_worker()
@@ -409,12 +519,30 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
             base_cfg.update(config_updates)
         return start_session(base_cfg, path)
 
-    state["running"] = True
-    state["paused"] = False
-
-    state["fallback_mode"] = None
     if config_updates:
         cfg = state.get("config") or {}
+        before_hash = _config_hash(cfg)
+        cfg.update(config_updates)
+        state["config"] = cfg
+        state["config_snapshot"] = dict(cfg)
+        _append_session_event(
+            state,
+            "config_changed",
+            {"before_hash": before_hash, "after_hash": _config_hash(cfg), "changed_keys": sorted(config_updates)},
+            f"config_changed|{_config_hash(cfg)}",
+        )
+
+    state = reconcile_session_state(state)
+    if not (state.get("reconciliation") or {}).get("integrity", {}).get("ok", True):
+        state["running"] = False
+        state["paused"] = True
+        state["fallback_mode"] = "ledger_integrity_hold"
+        save_state(state, path)
+        return state
+
+    state["running"] = True
+    state["paused"] = False
+    state["fallback_mode"] = None
     state["consistency"] = _build_consistency_report(state)
     state = _apply_runtime_mismatch_guards(state)
     if (state.get("runtime_guard") or {}).get("hasMismatch"):
@@ -423,12 +551,12 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
         _persist_session_snapshot(state)
         _release_lock()
         return state
-        cfg.update(config_updates)
-        state["config"] = cfg
 
     if state.get("alert_last_trade_count") is None:
         state["alert_last_trade_count"] = int((state.get("metrics") or {}).get("trades", 0) or 0)
 
+    resumed_at = _now_iso()
+    _append_session_event(state, "session_resumed", {"resumed_at": resumed_at}, f"resumed|{resumed_at}")
     save_state(state, path)
     pid = start_background_worker()
     state["worker_pid"] = pid
@@ -445,7 +573,10 @@ def stop_session(path: str = STATE_PATH):
 
 def reset_session(path: str = STATE_PATH):
     stop_background_worker()
-    state = {"running": False, "paused": False, "reset_at": _now_iso(), "metrics": {"virtual_balance": 0.0, "return_pct": 0.0, "trades": 0, "liquidations": 0}}
+    previous = load_state(path)
+    reset_at = _now_iso()
+    _append_session_event(previous, "session_reset", {"reset_at": reset_at}, f"reset|{reset_at}")
+    state = {"running": False, "paused": False, "reset_at": reset_at, "metrics": {"virtual_balance": 0.0, "return_pct": 0.0, "trades": 0, "liquidations": 0}}
     save_state(state, path)
     _persist_session_snapshot(state)
     _release_lock()
@@ -543,6 +674,8 @@ def get_audit_payload(path: str = STATE_PATH) -> Dict[str, Any]:
         "config": state.get("config"),
         "strategy_decision": state.get("strategy_decision"),
         "risk_status": state.get("risk_status"),
+        "reconciliation": state.get("reconciliation"),
+        "ledger_integrity": TradingLedger(LEDGER_PATH).verify_integrity(session_id=state.get("session_id")) if state.get("session_id") else {"ok": True, "events_checked": 0, "failures": []},
         "recent_events": TradingLedger(LEDGER_PATH).list_events(session_id=state.get("session_id"), limit=100) if state.get("session_id") else [],
     }
 
@@ -568,6 +701,30 @@ def get_ledger_events(path: str = STATE_PATH, limit: int = 200) -> Dict[str, Any
     session_id = state.get("session_id")
     events = TradingLedger(LEDGER_PATH).list_events(session_id=session_id, limit=limit) if session_id else []
     return {"session_id": session_id, "count": len(events), "events": events}
+
+
+def backup_ledger(destination: str = None) -> Dict[str, Any]:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = destination or os.path.join(BACKUP_DIR, f"trading-ledger-{timestamp}.sqlite3")
+    ledger = TradingLedger(LEDGER_PATH)
+    ledger.backup(target)
+    return {"path": target, "integrity": TradingLedger(target).verify_integrity()}
+
+
+def restore_ledger(source: str) -> Dict[str, Any]:
+    state = load_state()
+    if state.get("running"):
+        raise ValueError("pause the paper session before restoring the ledger")
+    ledger = TradingLedger(LEDGER_PATH)
+    result = ledger.restore_backup(source)
+    return {**result, "integrity": TradingLedger(LEDGER_PATH).verify_integrity()}
+
+
+def export_ledger_csv(destination: str = None) -> Dict[str, Any]:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = destination or os.path.join(BACKUP_DIR, f"trading-ledger-{timestamp}.csv")
+    TradingLedger(LEDGER_PATH).export_csv(target)
+    return {"path": target}
 
 
 def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path: str) -> Dict[str, Any]:
@@ -670,6 +827,7 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
     state["fallback_mode"] = None if (outcome.get("decision") or {}).get("data_quality", {}).get("ok") else "data_quality_hold"
     state["last_update"] = _now_iso()
     state["consistency"] = _build_consistency_report(state)
+    _append_checkpoint(state)
     save_state(state, path)
     _persist_session_snapshot(state)
     _release_lock()
@@ -874,6 +1032,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     if not state['consistency'].get('ok'):
         note = (state.get('result') or {}).get('note') or ''
         state['result']['note'] = (f"{note} | consistency warning").strip(' |')
+    _append_checkpoint(state)
     save_state(state, path)
     _persist_session_snapshot(state)
     _release_lock()
