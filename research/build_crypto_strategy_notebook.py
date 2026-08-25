@@ -97,7 +97,7 @@ robustness_summary = robustness.groupby(['asset','family']).agg(
     best_holdout_pct=('holdout_return_pct','max'),
 ).round(2)
 display(robustness_summary)
-display(Markdown('### Parameters selected on 2021–2023, evaluated on 2024–current'))
+display(Markdown('### Parameters selected on 2021-2023, evaluated on 2024-current'))
 display(study['walk_forward'][['asset','family','params','train_return_pct','holdout_return_pct','full_sharpe','full_max_drawdown_pct']].round(2))
 display(Image(filename=str(OUTPUT / 'parameter_robustness_holdout.png')))
 display(Image(filename=str(OUTPUT / 'btc_cost_sensitivity.png')))
@@ -110,7 +110,7 @@ display(Image(filename=str(OUTPUT / 'btc_cost_sensitivity.png')))
 
 ### Methodology Review
 
-The independent harness avoids same-bar close execution, includes turnover costs, applies actual funding with correct direction, caps exposure at 1.0x, checks three assets, separates 2021–2023 selection from 2024-current holdout, and tests nearby parameters and costs.
+The independent harness avoids same-bar close execution, includes turnover costs, applies actual funding with correct direction, caps exposure at 1.0x, checks three assets, separates 2021-2023 selection from 2024-current holdout, and tests nearby parameters and costs.
 
 ### Issues Found
 
@@ -126,7 +126,7 @@ The independent harness avoids same-bar close execution, includes turnover costs
 - Execution timing: verified — signal is shifted one bar before returns are applied.
 - Funding sign: verified — net return subtracts `position × funding_rate`, so shorts receive positive funding.
 - Cost sensitivity: verified across 4, 8, 13, and 20 bps per turnover unit.
-- Holdout: verified using 2024-current after parameter selection on 2021–2023.
+- Holdout: verified using 2024-current after parameter selection on 2021-2023.
 
 ### Required Caveats
 
@@ -143,7 +143,7 @@ futures = study['aggregate'][study['aggregate']['strategy'].str.contains('long_s
 rsi = study['aggregate'].query("strategy == 'rsi_pullback_long_cash'").iloc[0]
 display(Markdown(f'''Results below are observations from the committed study run through **{as_of}** and will change after a data refresh.
 
-1. **Paper-trading candidate:** long/cash 90-day momentum + 200-day trend filter, BTC/ETH/SOL 60/30/10, no leverage. Among the conservative 20% and 25% rows, the 2021–2023 training-only Sharpe selects **{conservative.target_vol_pct:.0f}%** (training Sharpe **{conservative.selection_sharpe_2021_2023:.2f}**). Its untouched 2024-current holdout return is **{conservative.return_2024_current_pct:.1f}%**; full-sample CAGR **{conservative.cagr_pct:.1f}%** and max drawdown **{conservative.max_drawdown_pct:.1f}%** are descriptive, not selection inputs.
+1. **Paper-trading candidate:** long/cash 90-day momentum + 200-day trend filter, BTC/ETH/SOL 60/30/10, no leverage. Among the conservative 20% and 25% rows, the 2021-2023 training-only Sharpe selects **{conservative.target_vol_pct:.0f}%** (training Sharpe **{conservative.selection_sharpe_2021_2023:.2f}**). Its untouched 2024-current holdout return is **{conservative.return_2024_current_pct:.1f}%**; full-sample CAGR **{conservative.cagr_pct:.1f}%** and max drawdown **{conservative.max_drawdown_pct:.1f}%** are descriptive, not selection inputs.
 2. **Benchmark:** retain the 50/200-day long/cash trend and compare its asset-level results in the generated tables.
 3. **Unrestricted futures variants:** do not promote while their generated worst drawdowns remain between **{futures.worst_max_drawdown_pct.min():.1f}%** and **{futures.worst_max_drawdown_pct.max():.1f}%**.
 4. **RSI pullback:** this corrected bar-native RSI(14) control produced an estimated median **{rsi.median_round_trips:.1f}** round trips; judge it from the regenerated holdout and cost tables rather than a fixed narrative.
