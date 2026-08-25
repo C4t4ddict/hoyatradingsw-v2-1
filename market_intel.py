@@ -7,12 +7,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, wait
 from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 
 import feedparser
 
 CACHE_PATH = Path(os.getenv("MARKET_INTEL_CACHE_PATH", "data/market_intel_cache.json"))
 CACHE_TTL_SEC = int(os.getenv("MARKET_INTEL_CACHE_TTL_SEC", "300"))
+SOURCE_TIMEOUT_SEC = float(os.getenv("MARKET_INTEL_SOURCE_TIMEOUT_SEC", "3.0"))
+COLLECTION_BUDGET_SEC = float(os.getenv("MARKET_INTEL_COLLECTION_BUDGET_SEC", "8.0"))
+MAX_SOURCE_WORKERS = int(os.getenv("MARKET_INTEL_MAX_WORKERS", "6"))
 
 
 @dataclass
@@ -146,41 +151,77 @@ def _iter_sources() -> List[Source]:
     return items
 
 
-def fetch_items(per_source: int = 8) -> List[Dict]:
+def _parse_source(src: Source, per_source: int, timeout_sec: float) -> List[Dict]:
     rows: List[Dict] = []
-    for src in _iter_sources():
-        try:
-            feed = feedparser.parse(src.url)
-            for e in (feed.entries or [])[:per_source]:
-                title = _clean(getattr(e, "title", ""))
-                summary = _clean(getattr(e, "summary", ""))
-                link = getattr(e, "link", "")
-                published = getattr(e, "published", "")
-                score = _event_score(title, summary, src.trust)
-                if score == 0.0:
-                    continue
-                topic = _classify_topic(title, summary)
-                event_id = hashlib.sha1(f"{src.name}|{title}|{published}|{link}".encode("utf-8")).hexdigest()
-                rows.append({
-                    "event_id": event_id,
-                    "event_time": datetime.now(timezone.utc).isoformat(),
-                    "source": src.name,
-                    "kind": src.kind,
-                    "topic": topic,
-                    "title": title,
-                    "summary": summary,
-                    "link": link,
-                    "published": published,
-                    "score": score,
-                    "trust": src.trust,
-                    "is_trump": _contains_any(f"{title} {summary}", TRUMP_WORDS) > 0,
-                    "is_scheduled": _contains_any(f"{title} {summary}", SCHEDULE_WORDS) > 0,
-                })
-        except Exception:
+    request = Request(src.url, headers={"User-Agent": "HoyaTradingSW/2.1 market-intel"})
+    with urlopen(request, timeout=max(0.1, timeout_sec)) as response:
+        payload = response.read()
+    feed = feedparser.parse(payload)
+    for entry in (feed.entries or [])[:per_source]:
+        title = _clean(getattr(entry, "title", ""))
+        summary = _clean(getattr(entry, "summary", ""))
+        link = getattr(entry, "link", "")
+        published = getattr(entry, "published", "")
+        score = _event_score(title, summary, src.trust)
+        if score == 0.0:
             continue
+        topic = _classify_topic(title, summary)
+        event_id = hashlib.sha1(f"{src.name}|{title}|{published}|{link}".encode("utf-8")).hexdigest()
+        rows.append({
+            "event_id": event_id,
+            "event_time": datetime.now(timezone.utc).isoformat(),
+            "source": src.name,
+            "kind": src.kind,
+            "topic": topic,
+            "title": title,
+            "summary": summary,
+            "link": link,
+            "published": published,
+            "score": score,
+            "trust": src.trust,
+            "is_trump": _contains_any(f"{title} {summary}", TRUMP_WORDS) > 0,
+            "is_scheduled": _contains_any(f"{title} {summary}", SCHEDULE_WORDS) > 0,
+        })
+    return rows
+
+
+def _fetch_items_result(per_source: int = 8) -> Dict:
+    sources = _iter_sources()
+    started = time.monotonic()
+    executor = ThreadPoolExecutor(max_workers=max(1, min(MAX_SOURCE_WORKERS, len(sources) or 1)))
+    futures = {
+        executor.submit(_parse_source, source, per_source, SOURCE_TIMEOUT_SEC): source
+        for source in sources
+    }
+    done, pending = wait(futures, timeout=max(0.1, COLLECTION_BUDGET_SEC))
+    rows: List[Dict] = []
+    failures = []
+    for future in done:
+        source = futures[future]
+        try:
+            rows.extend(future.result())
+        except Exception as exc:
+            failures.append({"source": source.name, "error": type(exc).__name__})
+    timed_out = [futures[future].name for future in pending]
+    for future in pending:
+        future.cancel()
+    executor.shutdown(wait=False, cancel_futures=True)
 
     rows.sort(key=lambda x: abs(float(x.get("score", 0.0))), reverse=True)
-    return rows
+    return {
+        "rows": rows,
+        "status": {
+            "sources": len(sources),
+            "completed": len(done),
+            "failed": failures,
+            "timed_out": timed_out,
+            "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+        },
+    }
+
+
+def fetch_items(per_source: int = 8) -> List[Dict]:
+    return _fetch_items_result(per_source=per_source)["rows"]
 
 
 def summarize_market(rows: List[Dict]) -> Dict:
@@ -245,8 +286,23 @@ def get_market_brief(force_refresh: bool = False) -> Dict:
         except Exception:
             pass
 
-    rows = fetch_items(per_source=8)
+    stale_cache = None
+    if CACHE_PATH.exists():
+        try:
+            stale_cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            stale_cache = None
+
+    collection = _fetch_items_result(per_source=8)
+    rows = collection["rows"]
+    if not rows and stale_cache:
+        stale_cache.pop("_cached_at", None)
+        stale_cache["collection_status"] = {**collection["status"], "fallback": "stale_cache"}
+        stale_cache["stale"] = True
+        return stale_cache
     brief = summarize_market(rows)
+    brief["collection_status"] = {**collection["status"], "fallback": None}
+    brief["stale"] = False
     try:
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         out = dict(brief)
