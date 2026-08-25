@@ -146,6 +146,11 @@ npm run dev
 
 `small_live`와 `live` 승격에는 실제 거래소 검증 증적이 필수이며, 현재 개발 범위에서는 해당 증적을 생성하지 않는다.
 
+승인 근거 산출은 `strategy_validation.py`가 담당한다. Purged walk-forward,
+인과적 시장 국면별 성과, 비용·펀딩 스트레스, Monte Carlo tail risk,
+전략 상관관계와 benchmark 초과성과를 생성하며 상세 입력 형식은
+`docs/STRATEGY_VALIDATION.md`에 기록되어 있다.
+
 ## 현재 paper 엔진 메모
 - 기본 모드는 `vol_target_momentum` 이벤트 기반 simulated paper다.
   - BTC/ETH/SOL 기본 비중 60/30/10
