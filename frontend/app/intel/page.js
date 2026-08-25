@@ -1,4 +1,5 @@
 import { fetchJson } from '../../lib/api'
+import { koBias, koTopic } from '../../lib/ko'
 
 function shortSource(src=''){
   return src
@@ -16,25 +17,12 @@ function fmtDate(v=''){
   return `${d.getUTCFullYear()}.${String(d.getUTCMonth()+1).padStart(2,'0')}.${String(d.getUTCDate()).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`
 }
 
-function trTopic(t=''){
-  if (t === 'crypto') return 'Crypto'
-  if (t === 'macro') return 'Macro'
-  if (t === 'geopolitics') return 'Geopolitics'
-  if (t === 'other') return 'Other'
-  return t || '-'
-}
-
-function trTitle(t='') {
-  return t
-    .replaceAll('Bitcoin', '비트코인')
-    .replaceAll('bitcoin', '비트코인')
-    .replaceAll('Trump', '트럼프')
-    .replaceAll('Iran', '이란')
-    .replaceAll('Middle East', '중동')
-    .replaceAll('inflation', '인플레이션')
-}
-
 function fmt(n){ return Number(n || 0).toFixed(2) }
+
+function NewsTitle({item}){
+  if(!item) return '-'
+  return <><div>{item.title_ko || item.title || '-'}</div>{item.title_ko && item.title_ko !== item.title ? <div className="metric-note" style={{marginTop:6}}>{item.title}</div> : null}</>
+}
 
 export default async function IntelPage(){
   let data = null
@@ -55,101 +43,101 @@ export default async function IntelPage(){
   return (<>
     <div className="topbar">
       <div>
-        <div className="topbar-title">Market Intel Console</div>
-        <div className="topbar-sub">라이브 이벤트를 long / short 영향과 confidence 관점으로 해석하는 인텔리전스 페이지</div>
+        <div className="topbar-title">시장 인텔리전스</div>
+        <div className="topbar-sub">실시간 이벤트를 상승·하락 영향과 신뢰도 관점으로 해석합니다.</div>
       </div>
-      <div className="chip good">Aggregate bias · {(d.bias || b.bias || 'neutral').toUpperCase()}</div>
+      <div className="chip good">종합 방향 · {koBias(d.bias || b.bias)}</div>
     </div>
 
-    <h1 className="page-title">Market Intel</h1>
+    <h1 className="page-title">시장 인텔리전스</h1>
     <p className="page-sub">뉴스·거시·정책·지정학 이벤트를 스캔하고 ML 보조 판단과 함께 시장 방향성을 읽는 화면</p>
 
     <div className="grid">
-      <div className="card span-3 emphasis"><div className="metric-label">Live Intel Bias</div><div className="metric-value">{(b.bias || 'neutral').toUpperCase()}</div><div className="metric-note">실시간 이벤트 기반 종합 bias</div></div>
-      <div className="card span-3"><div className="metric-label">Live Long Score</div><div className="metric-value mono good">{fmt(b.long_score)}</div><div className="metric-note">bullish influence total</div></div>
-      <div className="card span-3"><div className="metric-label">Live Short Score</div><div className="metric-value mono bad">{fmt(b.short_score)}</div><div className="metric-note">bearish influence total</div></div>
-      <div className="card span-3"><div className="metric-label">ML Bias</div><div className="metric-value">{(d.bias || 'neutral').toUpperCase()}</div><div className="metric-note">ML은 보조 판단으로 사용</div></div>
+      <div className="card span-3 emphasis"><div className="metric-label">실시간 정보 방향</div><div className="metric-value">{koBias(b.bias)}</div><div className="metric-note">실시간 이벤트 기반 종합 판단</div></div>
+      <div className="card span-3"><div className="metric-label">뉴스 상승 점수</div><div className="metric-value mono good">{fmt(b.long_score)}</div><div className="metric-note">상승 영향 합계</div></div>
+      <div className="card span-3"><div className="metric-label">뉴스 하락 점수</div><div className="metric-value mono bad">{fmt(b.short_score)}</div><div className="metric-note">하락 영향 합계</div></div>
+      <div className="card span-3"><div className="metric-label">ML 방향</div><div className="metric-value">{koBias(d.bias)}</div><div className="metric-note">ML은 보조 판단으로만 사용</div></div>
 
       <div className="card span-4">
-        <div className="section-title">Bullish Spotlight</div>
-        <div className="section-sub">가장 강한 long 이벤트</div>
-        <div style={{fontWeight:800, marginBottom:8}}>{bestLong ? trTitle(bestLong.title) : '-'}</div>
-        <div className="metric-note">{bestLong ? `${shortSource(bestLong.source)} · ${trTopic(bestLong.topic)}` : '-'}</div>
-        <div style={{marginTop:14}} className="chip good">L {fmt(bestLong?.long_event_score)}</div>
+        <div className="section-title">상승 영향 주요 뉴스</div>
+        <div className="section-sub">상승 점수가 가장 높은 이벤트</div>
+        <div style={{fontWeight:800, marginBottom:8}}><NewsTitle item={bestLong} /></div>
+        <div className="metric-note">{bestLong ? `${shortSource(bestLong.source)} · ${koTopic(bestLong.topic)}` : '-'}</div>
+        <div style={{marginTop:14}} className="chip good">상승 {fmt(bestLong?.long_event_score)}</div>
       </div>
 
       <div className="card span-12">
         <div className="split">
           <div>
-            <div className="section-title">Signal Quality Gate</div>
+            <div className="section-title">신호 품질 검증</div>
             <div className="section-sub">실현 결과가 충분히 쌓이고 정확도·보정 기준을 통과한 신호만 실제 판단에 반영한다.</div>
           </div>
-          <div className={`chip ${quality.signals_enabled ? 'good' : 'warn'}`}>{quality.signals_enabled ? 'VALIDATED' : 'OBSERVATION MODE'}</div>
+          <div className={`chip ${quality.signals_enabled ? 'good' : 'warn'}`}>{quality.signals_enabled ? '검증 완료' : '관찰 모드'}</div>
         </div>
         <div className="mini-grid" style={{marginTop:14}}>
-          <div><div className="metric-label">Intel Weight</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(qualityWeights.intel||0)*100)}%</div><div className="metric-note">{intelQuality.observations||0} observations · Brier {fmt(intelQuality.brier_score)}</div></div>
-          <div><div className="metric-label">ML Weight</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(qualityWeights.ml||0)*100)}%</div><div className="metric-note">{mlQuality.observations||0} observations · Brier {fmt(mlQuality.brier_score)}</div></div>
-          <div><div className="metric-label">Position Multiplier</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(d.position_size_multiplier||0)*100)}%</div><div className="metric-note">시장 국면을 반영한 허용 노출</div></div>
-          <div><div className="metric-label">Decision Source</div><div className="metric-value" style={{fontSize:22}}>{(d.trigger_source||'quality_gate').toUpperCase()}</div><div className="metric-note">검증 전에는 자동으로 neutral 유지</div></div>
+          <div><div className="metric-label">시장 정보 비중</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(qualityWeights.intel||0)*100)}%</div><div className="metric-note">관측 {intelQuality.observations||0}건 · Brier {fmt(intelQuality.brier_score)}</div></div>
+          <div><div className="metric-label">ML 비중</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(qualityWeights.ml||0)*100)}%</div><div className="metric-note">관측 {mlQuality.observations||0}건 · Brier {fmt(mlQuality.brier_score)}</div></div>
+          <div><div className="metric-label">포지션 배수</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(d.position_size_multiplier||0)*100)}%</div><div className="metric-note">시장 국면을 반영한 허용 노출</div></div>
+          <div><div className="metric-label">판단 근거</div><div className="metric-value" style={{fontSize:22}}>{d.trigger_source==='quality_gate'?'품질 검증':(d.trigger_source||'-')}</div><div className="metric-note">검증 전에는 자동으로 중립 유지</div></div>
         </div>
       </div>
 
       <div className="card span-4">
-        <div className="section-title">Bearish Spotlight</div>
-        <div className="section-sub">가장 강한 short 이벤트</div>
-        <div style={{fontWeight:800, marginBottom:8}}>{bestShort ? trTitle(bestShort.title) : '-'}</div>
-        <div className="metric-note">{bestShort ? `${shortSource(bestShort.source)} · ${trTopic(bestShort.topic)}` : '-'}</div>
-        <div style={{marginTop:14}} className="chip bad">S {fmt(bestShort?.short_event_score)}</div>
+        <div className="section-title">하락 영향 주요 뉴스</div>
+        <div className="section-sub">하락 점수가 가장 높은 이벤트</div>
+        <div style={{fontWeight:800, marginBottom:8}}><NewsTitle item={bestShort} /></div>
+        <div className="metric-note">{bestShort ? `${shortSource(bestShort.source)} · ${koTopic(bestShort.topic)}` : '-'}</div>
+        <div style={{marginTop:14}} className="chip bad">하락 {fmt(bestShort?.short_event_score)}</div>
       </div>
 
       <div className="card span-4">
-        <div className="section-title">ML Probability Stack</div>
+        <div className="section-title">ML 확률 묶음</div>
         <div className="mini-grid">
-          <div><div className="metric-label">5m Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_5m||0)*100).toFixed(1)} / {(Number(s.down_5m||0)*100).toFixed(1)}</div></div>
-          <div><div className="metric-label">1h Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_1h||0)*100).toFixed(1)} / {(Number(s.down_1h||0)*100).toFixed(1)}</div></div>
-          <div><div className="metric-label">4h Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_4h||0)*100).toFixed(1)} / {(Number(s.down_4h||0)*100).toFixed(1)}</div></div>
-          <div><div className="metric-label">24h Up / Down</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_24h||0)*100).toFixed(1)} / {(Number(s.down_24h||0)*100).toFixed(1)}</div></div>
+          <div><div className="metric-label">5분 상승 / 하락</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_5m||0)*100).toFixed(1)} / {(Number(s.down_5m||0)*100).toFixed(1)}</div></div>
+          <div><div className="metric-label">1시간 상승 / 하락</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_1h||0)*100).toFixed(1)} / {(Number(s.down_1h||0)*100).toFixed(1)}</div></div>
+          <div><div className="metric-label">4시간 상승 / 하락</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_4h||0)*100).toFixed(1)} / {(Number(s.down_4h||0)*100).toFixed(1)}</div></div>
+          <div><div className="metric-label">24시간 상승 / 하락</div><div className="metric-value mono" style={{fontSize:22}}>{(Number(s.up_24h||0)*100).toFixed(1)} / {(Number(s.down_24h||0)*100).toFixed(1)}</div></div>
         </div>
       </div>
 
       <div className="card span-12">
         <div className="split">
           <div>
-            <div className="section-title">Collection Health</div>
-            <div className="section-sub">외부 RSS 장애 시에도 성공한 소스 또는 기존 캐시로 즉시 fallback</div>
+            <div className="section-title">수집 상태</div>
+            <div className="section-sub">외부 RSS 장애 시에도 성공한 소스 또는 기존 캐시로 즉시 대체</div>
           </div>
-          <div className={`chip ${b.stale ? 'warn' : 'good'}`}>{b.stale ? 'STALE CACHE' : 'LIVE / CACHED'}</div>
+          <div className={`chip ${b.stale ? 'warn' : 'good'}`}>{b.stale ? '오래된 캐시' : '실시간 / 캐시'}</div>
         </div>
         <div className="mini-grid" style={{marginTop:14}}>
-          <div><div className="metric-label">Completed Sources</div><div className="metric-value mono" style={{fontSize:22}}>{collection.completed ?? '-'}</div></div>
-          <div><div className="metric-label">Timed Out</div><div className="metric-value mono" style={{fontSize:22}}>{(collection.timed_out||[]).length}</div></div>
-          <div><div className="metric-label">Failed</div><div className="metric-value mono" style={{fontSize:22}}>{(collection.failed||[]).length}</div></div>
-          <div><div className="metric-label">Elapsed</div><div className="metric-value mono" style={{fontSize:22}}>{collection.elapsed_ms ?? '-'} ms</div></div>
+          <div><div className="metric-label">완료한 출처</div><div className="metric-value mono" style={{fontSize:22}}>{collection.completed ?? '-'}</div></div>
+          <div><div className="metric-label">시간 초과</div><div className="metric-value mono" style={{fontSize:22}}>{(collection.timed_out||[]).length}</div></div>
+          <div><div className="metric-label">실패</div><div className="metric-value mono" style={{fontSize:22}}>{(collection.failed||[]).length}</div></div>
+          <div><div className="metric-label">소요 시간</div><div className="metric-value mono" style={{fontSize:22}}>{collection.elapsed_ms ?? '-'} ms</div></div>
         </div>
       </div>
 
       <div className="card span-12">
         <div className="split" style={{marginBottom:12}}>
           <div>
-            <div className="section-title">Intel Feed</div>
-            <div className="section-sub">date-first / source / topic / L-S score / translated title 구조 유지</div>
+            <div className="section-title">시장 뉴스 피드</div>
+            <div className="section-sub">날짜·출처·주제·상승/하락 점수와 한국어 번역 제목을 함께 제공합니다.</div>
           </div>
-          <div className="metric-note">필터 UI는 실제 백엔드 필터 구현 전까지 제거하고, 현재는 최신 인텔 피드 자체에 집중</div>
+          <div className="metric-note">번역 실패 시 원문을 표시하며 분석은 항상 원문 기준입니다.</div>
         </div>
         <table className="table">
           <thead>
             <tr>
-              <th>Date</th><th>Source</th><th>Topic</th><th>Long</th><th>Short</th><th>Title</th>
+              <th>날짜</th><th>출처</th><th>주제</th><th>상승</th><th>하락</th><th>뉴스 제목</th>
             </tr>
           </thead>
           <tbody>
             {rows.slice(0,12).map((r,i)=><tr key={i}>
               <td className="mono">{fmtDate(r.event_time || r.published)}</td>
               <td>{shortSource(r.source)}</td>
-              <td>{trTopic(r.topic)}</td>
+              <td>{koTopic(r.topic)}</td>
               <td className="good mono">{fmt(r.long_event_score)}</td>
               <td className="bad mono">{fmt(r.short_event_score)}</td>
-              <td>{trTitle(r.title)}</td>
+              <td><NewsTitle item={r} /></td>
             </tr>)}
           </tbody>
         </table>

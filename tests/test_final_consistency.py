@@ -13,11 +13,12 @@ UTC = timezone.utc
 
 
 class ApiConsistencyTests(unittest.TestCase):
+    @patch("backend.app.services.overview_service.localize_market_brief", side_effect=lambda brief, limit: brief)
     @patch("backend.app.services.overview_service.build_signal_summary")
     @patch("backend.app.services.overview_service.get_market_brief")
     @patch("backend.app.services.overview_service.summarize", return_value={"total_trades": 1})
     @patch("backend.app.services.overview_service.read_events", return_value=[])
-    def test_overview_returns_the_ml_signal_contract_used_by_ui(self, _events, _summary, brief, build):
+    def test_overview_returns_the_ml_signal_contract_used_by_ui(self, _events, _summary, brief, build, localize):
         brief.return_value = {"top": [{"title": "event"}], "long_score": 2.0, "short_score": 1.0}
         build.return_value = {"decision": {"bias": "neutral"}, "scores": {"long_score": 0.0}}
 
@@ -26,6 +27,7 @@ class ApiConsistencyTests(unittest.TestCase):
         self.assertIn("ml_signal", payload)
         self.assertNotIn("ml_pred", payload)
         build.assert_called_once_with(brief.return_value["top"][0], brief.return_value)
+        localize.assert_called_once_with(brief.return_value, limit=6)
 
     @patch("backend.app.services.risk_service.get_live_control_store")
     @patch("backend.app.services.risk_service.health")

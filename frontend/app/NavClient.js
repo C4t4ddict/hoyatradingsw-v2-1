@@ -3,12 +3,12 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 const navItems = [
-  { href: '/', label: 'Dashboard' },
-  { href: '/intel', label: 'Market Intel' },
-  { href: '/paper', label: 'Paper Trading' },
-  { href: '/risk', label: 'Risk Control' },
-  { href: '/operations', label: 'Operations' },
-  { href: '/account', label: 'Account' },
+  { href: '/', label: '대시보드' },
+  { href: '/intel', label: '시장 인텔리전스' },
+  { href: '/paper', label: '모의투자' },
+  { href: '/risk', label: '위험 관리' },
+  { href: '/operations', label: '운영·보안' },
+  { href: '/account', label: '계정' },
 ]
 
 export default function NavClient(){
