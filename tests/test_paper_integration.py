@@ -32,6 +32,21 @@ class PaperServiceTests(unittest.TestCase):
         self.assertEqual(config["leverage"], 1.0)
         self.assertEqual(config["target_volatility"], 0.20)
 
+    @patch("backend.app.services.paper_service.start_paper_session")
+    @patch("backend.app.services.paper_service.stop_background_worker")
+    def test_unsafe_paper_overrides_are_clamped_to_validated_policy(self, _stop, start):
+        start.side_effect = lambda config: config
+        config = paper_service.start_paper({
+            "market_type": "futures", "symbol": "XRP/USDT:USDT",
+            "position_mode": "short", "leverage": 10, "target_volatility": 0.9,
+        })
+
+        self.assertEqual(config["market_type"], "spot")
+        self.assertEqual(config["symbol"], "BTC/ETH/SOL")
+        self.assertEqual(config["position_mode"], "long_cash")
+        self.assertEqual(config["leverage"], 1.0)
+        self.assertEqual(config["target_volatility"], 0.25)
+
     @patch("backend.app.services.paper_service.build_signal_summary", return_value={})
     @patch("backend.app.services.paper_service.get_market_brief", return_value={"top": []})
     @patch("backend.app.services.paper_service.load_paper_state")
@@ -47,6 +62,7 @@ class PaperServiceTests(unittest.TestCase):
         self.assertEqual(payload["strategy_decision"]["target_weights"]["BTC/USDT"], 0.4)
         self.assertEqual(payload["risk_status"]["pending_count"], 1)
         self.assertEqual(payload["pending_orders"][0]["order_id"], "one")
+        _brief.assert_called_once_with(force_refresh=False)
 
 
 class PaperLiveIntegrationTests(unittest.TestCase):

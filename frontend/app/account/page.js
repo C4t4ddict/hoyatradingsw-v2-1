@@ -1,70 +1,72 @@
-import { fetchJson } from '../../lib/api'
+'use client'
 
-function fmt(n, suffix=''){
-  const num = Number(n)
-  if (Number.isNaN(num)) return '-'
-  return `${num.toFixed(2)}${suffix}`
-}
+import { useEffect, useState } from 'react'
 
-export default async function AccountPage(){
-  let data = null
-  let paper = null
-  try { data = await fetchJson('/api/account?market_type=futures') } catch {}
-  try { paper = await fetchJson('/api/paper') } catch {}
+const BASE='http://127.0.0.1:8010'
+function fmt(n,suffix=''){ if(n===null||n===undefined||n==='') return '-'; const value=Number(n); return Number.isNaN(value)?'-':`${value.toFixed(2)}${suffix}` }
 
-  const bal = data?.balance || {}
-  const positions = data?.positions || []
-  const metrics = paper?.metrics || {}
-  const topPositions = positions.slice(0,10)
-  const totalPnl = topPositions.reduce((sum, p) => sum + Number(p.unrealizedPnl || 0), 0)
+export default function AccountPage(){
+  const [paper,setPaper]=useState(null)
+  const [security,setSecurity]=useState(null)
+  const [account,setAccount]=useState(null)
+  const [webhookToken,setWebhookToken]=useState('')
+  const [message,setMessage]=useState('')
+
+  useEffect(()=>{
+    Promise.all([
+      fetch(`${BASE}/api/paper`,{cache:'no-store'}).then(response=>response.json()),
+      fetch(`${BASE}/api/security/status`,{cache:'no-store'}).then(response=>response.json()),
+    ]).then(([paperData,securityData])=>{setPaper(paperData);setSecurity(securityData)}).catch(()=>setMessage('상태 API 조회 실패'))
+  },[])
+
+  const loadPrivateAccount=async()=>{
+    setMessage('')
+    const response=await fetch(`${BASE}/api/account?market_type=futures`,{cache:'no-store',headers:{'X-Webhook-Token':webhookToken}})
+    const payload=await response.json().catch(()=>({}))
+    if(!response.ok){setMessage(payload.detail||'인증된 계정 조회 실패');setAccount(null);return}
+    setAccount(payload)
+  }
+
+  const balance=account?.balance||{}
+  const positions=account?.positions||[]
+  const metrics=paper?.metrics||{}
+  const totalPnl=positions.reduce((sum,position)=>sum+Number(position.unrealizedPnl||0),0)
+  const credentialNames=new Set((security?.vault?.secrets||[]).map(item=>item.name))
+  const credentialsReady=credentialNames.has('API_KEY')&&credentialNames.has('API_SECRET')
+  const connected=Boolean(account?.ok)&&!account?.balance_error
 
   return (<>
-    <div className="topbar">
-      <div>
-        <div className="topbar-title">Account Overview</div>
-        <div className="topbar-sub">실거래 계정 잔고 / 포지션 / paper 성과 요약을 함께 보여주는 account 콘솔</div>
-      </div>
-      <div className={totalPnl >= 0 ? 'chip good' : 'chip bad'}>Open PnL · {fmt(totalPnl)}</div>
-    </div>
-
+    <div className="topbar"><div><div className="topbar-title">Account Boundary</div><div className="topbar-sub">Paper 성과와 인증된 private exchange 응답을 명확히 분리</div></div><div className={`chip ${connected?'good':'warn'}`}>{connected?'PRIVATE DATA CONNECTED':'PRIVATE DATA LOCKED'}</div></div>
     <h1 className="page-title">Account</h1>
-    <p className="page-sub">계정 밸런스, 포지션, open pnl, paper performance snapshot을 한 화면에 배치한 overview 페이지</p>
+    <p className="page-sub">실거래 계정 데이터는 자동 조회하지 않는다. 암호화 자격증명과 Webhook 인증을 모두 갖춘 경우에만 사용자가 명시적으로 조회한다.</p>
+    {message&&<div className="card soft" style={{marginBottom:18,padding:14}}>{message}</div>}
 
     <div className="grid">
-      <div className="card span-3 emphasis"><div className="metric-label">USDT Total</div><div className="metric-value mono">{fmt(bal.usdt_total)}</div><div className="metric-note">선물 계정 총 잔고</div></div>
-      <div className="card span-3"><div className="metric-label">USDT Free</div><div className="metric-value mono">{fmt(bal.usdt_free)}</div><div className="metric-note">사용 가능 잔고</div></div>
-      <div className="card span-3"><div className="metric-label">USDT Used</div><div className="metric-value mono">{fmt(bal.usdt_used)}</div><div className="metric-note">사용 중인 증거금</div></div>
-      <div className="card span-3"><div className="metric-label">Open PnL</div><div className={`metric-value mono ${totalPnl >= 0 ? 'good' : 'bad'}`}>{fmt(totalPnl)}</div><div className="metric-note">상위 포지션 기준 미실현 손익 합계</div></div>
+      <div className="card span-3 emphasis"><div className="metric-label">Connection</div><div className={`metric-value ${connected?'good':'warn'}`}>{connected?'READY':'LOCKED'}</div><div className="metric-note">private API 응답 기준</div></div>
+      <div className="card span-3"><div className="metric-label">USDT Total</div><div className="metric-value mono">{fmt(balance.usdt_total)}</div><div className="metric-note">미조회 값은 0이 아니라 - 로 표시</div></div>
+      <div className="card span-3"><div className="metric-label">Open Positions</div><div className="metric-value mono">{account?positions.length:'-'}</div><div className="metric-note">인증된 응답의 활성 포지션 수</div></div>
+      <div className="card span-3"><div className="metric-label">Open PnL</div><div className={`metric-value mono ${totalPnl>=0?'good':'bad'}`}>{account?fmt(totalPnl):'-'}</div><div className="metric-note">private positions 미실현 손익</div></div>
 
-      <div className="card span-8">
-        <div className="section-title">Open Positions</div>
-        <div className="section-sub">현재 포지션의 side / size / unrealized pnl 상태</div>
-        <table className="table">
-          <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unrealized PnL</th></tr></thead>
-          <tbody>
-            {topPositions.map((p,i)=><tr key={i}>
-              <td>{p.symbol || '-'}</td>
-              <td>{p.side || '-'}</td>
-              <td className="mono">{p.contracts || p.positionAmt || '-'}</td>
-              <td className="mono">{fmt(p.entryPrice)}</td>
-              <td className="mono">{fmt(p.markPrice)}</td>
-              <td className={`mono ${Number(p.unrealizedPnl || 0) >= 0 ? 'good' : 'bad'}`}>{fmt(p.unrealizedPnl)}</td>
-            </tr>)}
-          </tbody>
-        </table>
+      <div className="card span-5">
+        <div className="section-title">Authenticated Refresh</div>
+        <div className="section-sub">토큰은 브라우저 상태에 저장하지 않고 이 요청의 헤더에만 사용한다. 실제 거래소 테스트는 이 개발 범위에서 수행하지 않는다.</div>
+        <div className="metric-label">Webhook Token</div>
+        <input type="password" value={webhookToken} onChange={event=>setWebhookToken(event.target.value)} placeholder="X-Webhook-Token" autoComplete="off" />
+        <div className="button-row" style={{marginTop:14}}><button disabled={!webhookToken} onClick={loadPrivateAccount}>Private Account 조회</button></div>
+        <div style={{marginTop:14}} className={`chip ${credentialsReady?'good':'warn'}`}>{credentialsReady?'ENCRYPTED CREDENTIALS READY':'API CREDENTIALS NOT STORED'}</div>
       </div>
 
-      <div className="card span-4">
+      <div className="card span-7">
         <div className="section-title">Paper Snapshot</div>
-        <div className="metric-label">Virtual Balance</div><div className="metric-value mono">${fmt(metrics.virtual_balance)}</div>
-        <div className="metric-label" style={{marginTop:12}}>Return</div><div className={`metric-value mono ${Number(metrics.return_pct||0)>=0?'good':'bad'}`} style={{fontSize:24}}>{fmt(metrics.return_pct,'%')}</div>
-        <div className="metric-label" style={{marginTop:12}}>Realized PnL</div><div className={`metric-value mono ${Number(metrics.realized_pnl||0)>=0?'good':'bad'}`} style={{fontSize:24}}>{fmt(metrics.realized_pnl)}</div>
+        <div className="mini-grid">
+          <div><div className="metric-label">Virtual Balance</div><div className="metric-value mono">${fmt(metrics.virtual_balance)}</div></div>
+          <div><div className="metric-label">Return</div><div className={`metric-value mono ${Number(metrics.return_pct||0)>=0?'good':'bad'}`}>{fmt(metrics.return_pct,'%')}</div></div>
+          <div><div className="metric-label">Realized PnL</div><div className={`metric-value mono ${Number(metrics.realized_pnl||0)>=0?'good':'bad'}`}>{fmt(metrics.realized_pnl)}</div></div>
+          <div><div className="metric-label">Session</div><div className="metric-value" style={{fontSize:24}}>{paper?.running?'RUN':paper?.paused?'PAUSE':'STOP'}</div></div>
+        </div>
       </div>
 
-      <div className="card span-12">
-        <div className="section-title">Account Narrative</div>
-        <div className="section-sub">네가 준 account 시안 구조에 맞춰 계정 overview 성격을 유지하면서, 기존 백엔드의 balance/positions 응답과 paper 성과 데이터를 같이 붙여서 실제 동작하게 연결했다.</div>
-      </div>
+      <div className="card span-12"><div className="section-title">Authenticated Positions</div><table className="table"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unrealized PnL</th></tr></thead><tbody>{positions.slice(0,20).map((position,index)=><tr key={index}><td>{position.symbol||'-'}</td><td>{position.side||'-'}</td><td className="mono">{position.contracts??'-'}</td><td className="mono">{fmt(position.entryPrice)}</td><td className="mono">{fmt(position.markPrice)}</td><td className={`mono ${Number(position.unrealizedPnl||0)>=0?'good':'bad'}`}>{fmt(position.unrealizedPnl)}</td></tr>)}</tbody></table></div>
     </div>
   </>)
 }

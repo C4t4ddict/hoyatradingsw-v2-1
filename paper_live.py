@@ -356,6 +356,8 @@ def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "market_regime": state.get("market_regime"),
         "reconciliation": state.get("reconciliation"),
         "ops_seen_event_keys": state.get("ops_seen_event_keys"),
+        "loss_cooldown_until": state.get("loss_cooldown_until"),
+        "loss_cooldown_trade_count": state.get("loss_cooldown_trade_count"),
     }
 
 
@@ -373,11 +375,24 @@ def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
         return {"running": False}
 
 
+def _replace_state_file(staged: str, path: str) -> None:
+    os.replace(staged, path)
+
+
 def save_state(state: Dict[str, Any], path: str = STATE_PATH):
     _ensure_parent(path)
     disk_state = _sanitize_state_for_disk(state)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(disk_state, f, ensure_ascii=False, indent=2)
+    parent = os.path.dirname(path) or "."
+    staged = os.path.join(parent, f"paper-state-{uuid.uuid4().hex}.json.tmp")
+    try:
+        with open(staged, "x", encoding="utf-8") as handle:
+            json.dump(disk_state, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_state_file(staged, path)
+    finally:
+        if os.path.exists(staged):
+            os.remove(staged)
 
 
 def _read_pid(path: str = PID_PATH) -> int:
@@ -729,6 +744,45 @@ def export_ledger_csv(destination: str = None) -> Dict[str, Any]:
     return {"path": target}
 
 
+def select_ml_execution_policy(
+    decision: Dict[str, Any], scores: Dict[str, Any], state: Dict[str, Any],
+    *, now: datetime = None, cooldown_hours: int = 24,
+) -> Dict[str, Any]:
+    """Directional validated signals may trade; neutral signals always hold."""
+    current = now or datetime.now(timezone.utc)
+    trades = ((state.get("result") or {}).get("trades") or [])
+    consecutive_losses = 0
+    for trade in reversed(trades[-10:]):
+        if float(trade.get("pnl", 0) or 0) < 0:
+            consecutive_losses += 1
+        else:
+            break
+    trade_count = len(trades)
+    marker = int(state.get("loss_cooldown_trade_count") or -1)
+    if consecutive_losses >= 2 and marker != trade_count:
+        state["loss_cooldown_until"] = (current + timedelta(hours=max(1, cooldown_hours))).isoformat()
+        state["loss_cooldown_trade_count"] = trade_count
+    cooldown_until = state.get("loss_cooldown_until")
+    cooldown_end = None
+    if cooldown_until:
+        try:
+            cooldown_end = datetime.fromisoformat(str(cooldown_until).replace("Z", "+00:00"))
+            if cooldown_end.tzinfo is None:
+                cooldown_end = cooldown_end.replace(tzinfo=timezone.utc)
+        except ValueError:
+            cooldown_end = None
+    if cooldown_end and current < cooldown_end:
+        return {"hold": True, "fallback_mode": "cooldown_after_losses", "strategy": "hold", "timeframe": "15m", "position_mode": "flat"}
+
+    bias = decision.get("bias")
+    if bias in {"short", "lean_short"}:
+        return {"hold": False, "fallback_mode": None, "strategy": "trend_continuation_system", "timeframe": "15m", "position_mode": "short"}
+    if bias in {"long", "lean_long"}:
+        timeframe = "15m" if float(scores.get("up_15m", 0)) >= float(scores.get("up_5m", 0)) else "30m"
+        return {"hold": False, "fallback_mode": None, "strategy": "trend_continuation_system", "timeframe": timeframe, "position_mode": "long"}
+    return {"hold": True, "fallback_mode": "neutral_wait_quality_gate", "strategy": "hold", "timeframe": "15m", "position_mode": "flat"}
+
+
 def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path: str) -> Dict[str, Any]:
     """Advance the portfolio only from confirmed 4h closes and next-bar opens."""
     now = datetime.now(timezone.utc)
@@ -874,66 +928,13 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         scores = ml_signal.get('scores') or {}
         state['ml_signal'] = ml_signal
 
-        recent_trades = ((state.get('result') or {}).get('trades') or [])[-4:]
-        consecutive_losses = 0
-        for trade in reversed(recent_trades):
-            if float(trade.get('pnl', 0) or 0) < 0:
-                consecutive_losses += 1
-            else:
-                break
+        selection = select_ml_execution_policy(decision, scores, state)
+        strategy = selection['strategy']
+        position_mode = selection['position_mode']
+        timeframe = selection['timeframe']
+        state['fallback_mode'] = selection['fallback_mode']
 
-        no_trade = False
-        if consecutive_losses >= 2:
-            state['fallback_mode'] = 'cooldown_after_losses'
-            no_trade = True
-
-        if not no_trade and decision.get('bias') in ['short', 'lean_short']:
-            position_mode = 'short'
-            strategy = 'trend_continuation_system'
-            timeframe = '15m'
-        elif not no_trade and decision.get('bias') in ['long', 'lean_long']:
-            position_mode = 'long'
-            strategy = 'trend_continuation_system'
-            timeframe = '15m' if (scores.get('up_15m', 0) >= scores.get('up_5m', 0)) else '30m'
-        else:
-            if not no_trade:
-                state['fallback_mode'] = 'neutral_selector_strict'
-
-                short_agree = scores.get('down_5m', 0) > 0.57 and scores.get('down_15m', 0) > 0.55 and scores.get('intel_short_score', 0) >= scores.get('intel_long_score', 0) + 1.2
-                long_agree = scores.get('up_5m', 0) > 0.57 and scores.get('up_15m', 0) > 0.55 and scores.get('intel_long_score', 0) >= scores.get('intel_short_score', 0) + 1.2
-                reversion_agree = (
-                    abs((scores.get('intel_long_score', 0) - scores.get('intel_short_score', 0))) < 0.7 and
-                    max(scores.get('up_5m', 0), scores.get('down_5m', 0), scores.get('up_15m', 0), scores.get('down_15m', 0)) < 0.54
-                )
-
-                if short_agree:
-                    strategy = 'breakout_20'
-                    position_mode = 'short'
-                    timeframe = '15m'
-                    cfg['sl_pct'] = 0.18
-                    cfg['tp_rr'] = 3.0
-                elif long_agree:
-                    strategy = 'trend_continuation_system'
-                    position_mode = 'long'
-                    timeframe = '15m'
-                    cfg['sl_pct'] = 0.18
-                    cfg['tp_rr'] = 3.0
-                elif reversion_agree:
-                    strategy = 'rsi_reversion'
-                    position_mode = 'long'
-                    timeframe = '15m'
-                    cfg['rsi_lower'] = 42
-                    cfg['rsi_upper'] = 58
-                    cfg['sl_pct'] = 0.14
-                    cfg['tp_rr'] = 2.6
-                else:
-                    state['fallback_mode'] = 'neutral_wait_strict'
-                    no_trade = True
-
-        if no_trade:
-            strategy = 'rsi_reversion'
-            position_mode = 'long'
-            timeframe = '15m'
+        if selection['hold']:
             result = state.get('result') or {}
             result['note'] = f"paper hold: {state.get('fallback_mode') or 'no_trade'}"
             state['result'] = result
