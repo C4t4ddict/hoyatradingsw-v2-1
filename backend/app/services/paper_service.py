@@ -5,16 +5,44 @@ from market_intel import get_market_brief
 from backend.app.services.ml_signal_service import build_signal_summary
 
 
+DEFAULT_PAPER_CONFIG = {
+    'market_type': 'spot',
+    'symbol': 'BTC/ETH/SOL',
+    'timeframe': '4h',
+    'strategy': 'vol_target_momentum',
+    'initial_usdt': 1000.0,
+    'position_mode': 'long_cash',
+    'leverage': 1.0,
+    'mode': 'vol_target_momentum',
+    'live_refresh_sec': 60,
+    'fee_pct': 0.0005,
+    'slippage_pct': 0.0005,
+    'target_volatility': 0.20,
+}
+
+
+def _safe_paper_config(overrides: dict = None):
+    config = dict(DEFAULT_PAPER_CONFIG)
+    requested = overrides or {}
+    config['initial_usdt'] = min(1_000_000.0, max(100.0, float(requested.get('initial_usdt', config['initial_usdt']))))
+    config['target_volatility'] = min(0.25, max(0.01, float(requested.get('target_volatility', config['target_volatility']))))
+    config['live_refresh_sec'] = min(3600, max(15, int(requested.get('live_refresh_sec', config['live_refresh_sec']))))
+    config['fee_pct'] = min(0.02, max(0.0, float(requested.get('fee_pct', config['fee_pct']))))
+    config['slippage_pct'] = min(0.02, max(0.0, float(requested.get('slippage_pct', config['slippage_pct']))))
+    return config
+
+
 def get_paper_payload():
     state = load_paper_state()
-    latest_event = ((get_market_brief(force_refresh=False).get('top') or [{}])[0])
-    ml_signal = build_signal_summary(latest_event, get_market_brief(force_refresh=False), regime=state.get('market_regime')) if latest_event else {}
+    brief = get_market_brief(force_refresh=False)
+    latest_event = ((brief.get('top') or [{}])[0])
+    ml_signal = build_signal_summary(latest_event, brief, regime=state.get('market_regime')) if latest_event else {}
     return {
         'running': state.get('running'),
         'paused': state.get('paused'),
         'metrics': state.get('metrics'),
         'result': state.get('result'),
-        'config': state.get('config'),
+        'config': _safe_paper_config(state.get('config')),
         'ml_signal': ml_signal,
         'executed_strategy': state.get('executed_strategy'),
         'executed_timeframe': state.get('executed_timeframe'),
@@ -31,22 +59,7 @@ def get_paper_payload():
 
 def start_paper(overrides: dict = None):
     stop_background_worker()
-    cfg = {
-        'market_type': 'spot',
-        'symbol': 'BTC/ETH/SOL',
-        'timeframe': '4h',
-        'strategy': 'vol_target_momentum',
-        'initial_usdt': 1000.0,
-        'position_mode': 'long_cash',
-        'leverage': 1.0,
-        'mode': 'vol_target_momentum',
-        'live_refresh_sec': 60,
-        'fee_pct': 0.0005,
-        'slippage_pct': 0.0005,
-        'target_volatility': 0.20,
-    }
-    if overrides:
-        cfg.update(overrides)
+    cfg = _safe_paper_config(overrides)
     return start_paper_session(cfg)
 
 
@@ -60,22 +73,8 @@ def reset_paper():
 
 def update_paper_config(overrides: dict = None):
     state = load_paper_state()
-    current_cfg = (state or {}).get('config') or {
-        'market_type': 'spot',
-        'symbol': 'BTC/ETH/SOL',
-        'timeframe': '4h',
-        'strategy': 'vol_target_momentum',
-        'initial_usdt': 1000.0,
-        'position_mode': 'long_cash',
-        'leverage': 1.0,
-        'mode': 'vol_target_momentum',
-        'live_refresh_sec': 60,
-        'fee_pct': 0.0005,
-        'slippage_pct': 0.0005,
-        'target_volatility': 0.20,
-    }
-    if overrides:
-        current_cfg.update(overrides)
+    requested = {**((state or {}).get('config') or {}), **(overrides or {})}
+    current_cfg = _safe_paper_config(requested)
     stop_background_worker()
     return start_paper_session(current_cfg)
 

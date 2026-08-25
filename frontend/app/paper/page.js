@@ -2,23 +2,20 @@
 import { useEffect, useMemo, useState } from 'react'
 
 const BASE = 'http://127.0.0.1:8010'
-const SYMBOLS = ['BTC/USDT:USDT','ETH/USDT:USDT','XRP/USDT:USDT','SOL/USDT:USDT','DOGE/USDT:USDT','BNB/USDT:USDT','ADA/USDT:USDT','AVAX/USDT:USDT','LINK/USDT:USDT','SUI/USDT:USDT']
 
-function fmt(n, suffix='') { return `${Number(n || 0).toFixed(2)}${suffix}` }
+function fmt(n, suffix='') { return n===null||n===undefined||n==='' ? '-' : `${Number(n).toFixed(2)}${suffix}` }
 
 export default function PaperPage(){
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(false)
-  const [symbol,setSymbol]=useState('XRP/USDT:USDT')
-  const [leverage,setLeverage]=useState(10)
   const [initialUsdt,setInitialUsdt]=useState(1000)
+  const [targetVolatility,setTargetVolatility]=useState(20)
 
   const load=async()=>{ const r=await fetch(`${BASE}/api/paper`,{cache:'no-store'}); const j=await r.json(); setData(j); return j }
   useEffect(()=>{ load().then((j)=>{
     const cfg=j?.config||{}
-    if (cfg.symbol) setSymbol(cfg.symbol)
-    if (cfg.leverage != null) setLeverage(cfg.leverage)
     if (cfg.initial_usdt != null) setInitialUsdt(cfg.initial_usdt)
+    if (cfg.target_volatility != null) setTargetVolatility(Number(cfg.target_volatility)*100)
   }) },[])
 
   const call=async(path, body=null)=>{
@@ -26,28 +23,27 @@ export default function PaperPage(){
     await fetch(`${BASE}${path}`,{method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : null})
     const j = await load()
     const cfg=j?.config||{}
-    if (cfg.symbol) setSymbol(cfg.symbol)
-    if (cfg.leverage != null) setLeverage(cfg.leverage)
     if (cfg.initial_usdt != null) setInitialUsdt(cfg.initial_usdt)
+    if (cfg.target_volatility != null) setTargetVolatility(Number(cfg.target_volatility)*100)
     setLoading(false)
   }
 
   const applyConfig=async()=>{
     await call('/api/paper/config', {
-      market_type:'futures',
-      symbol,
-      leverage:Number(leverage),
+      market_type:'spot', symbol:'BTC/ETH/SOL', leverage:1,
       initial_usdt:Number(initialUsdt),
+      target_volatility:Number(targetVolatility)/100,
+      strategy:'vol_target_momentum', mode:'vol_target_momentum', timeframe:'4h', position_mode:'long_cash',
     })
   }
 
   const startPaper=async()=>{
     await call('/api/paper/start', {
-      market_type:'futures',
-      symbol,
-      initial_usdt:Number(initialUsdt),
-      leverage:Number(leverage),
       ...(data?.config || {}),
+      market_type:'spot', symbol:'BTC/ETH/SOL',
+      initial_usdt:Number(initialUsdt),
+      leverage:1, target_volatility:Number(targetVolatility)/100,
+      strategy:'vol_target_momentum', mode:'vol_target_momentum', timeframe:'4h', position_mode:'long_cash',
     })
   }
 
@@ -67,24 +63,24 @@ export default function PaperPage(){
   const latestTradePnlClass = Number(latestTrade?.pnl || 0) >= 0 ? 'good' : 'bad'
 
   const positionSummary = useMemo(() => ({
-    side: latestTrade?.side || d.bias || '-',
+    side: latestTrade?.side || 'CASH',
     entry: fmt(latestTrade?.entry),
     exit: fmt(latestTrade?.exit),
     pnl: fmt(latestTrade?.pnl),
     pnlPct: fmt(latestTrade?.pnl_pct, '%'),
-  }), [latestTrade, d.bias])
+  }), [latestTrade])
 
   return (<>
     <div className="topbar">
       <div>
         <div className="topbar-title">Paper Trading Operations</div>
-        <div className="topbar-sub">심볼 / 레버리지 / 상태 변경이 즉시 반영되는 paper trading 운영 콘솔</div>
+        <div className="topbar-sub">검증된 고정 universe와 변동성 목표, 세션 상태를 관리하는 paper trading 운영 콘솔</div>
       </div>
       <div className={`chip ${runningState === 'RUN' ? 'good' : runningState === 'PAUSE' ? 'warn' : 'bad'}`}>{runningState}</div>
     </div>
 
     <h1 className="page-title">Paper Trading</h1>
-    <p className="page-sub">ML signal 기반 가상 운용을 제어하고, 최근 체결/손익/알림 형식을 한 화면에서 확인하는 페이지</p>
+    <p className="page-sub">확정 4시간봉 기반 BTC/ETH/SOL long/cash 변동성 타기팅 가상 운용을 제어하고 감사하는 페이지</p>
 
     <div className="grid">
       <div className="card span-4 emphasis">
@@ -105,31 +101,30 @@ export default function PaperPage(){
       </div>
 
       <div className="card span-4">
-        <div className="metric-label">Current Bias</div>
+        <div className="metric-label">Advisory Bias</div>
         <div className="metric-value">{(d.bias || 'neutral').toUpperCase()}</div>
-        <div className="metric-note">live intel + ML assist 기준 현재 방향성</div>
+        <div className="metric-note">운영 참고용이며 vol-target 주문 방향을 직접 결정하지 않음</div>
       </div>
 
       <div className="card span-6">
         <div className="section-title">Config Panel</div>
-        <div className="section-sub">현재는 symbol / leverage / starting balance만 즉시 반영하고, 나머지 운용 로직은 백엔드 config 기준으로 유지</div>
+        <div className="section-sub">실행 엔진과 동일한 BTC/ETH/SOL · spot · 4h · long/cash · 1x 설정만 제공</div>
         <div className="mini-grid">
           <div>
-            <div className="metric-label">Symbol</div>
-            <input list="symbol-options" value={symbol} onChange={e=>setSymbol(e.target.value)} placeholder="심볼 검색" />
-            <datalist id="symbol-options">{SYMBOLS.map(s=><option key={s} value={s} />)}</datalist>
+            <div className="metric-label">Universe</div>
+            <div className="metric-note mono">BTC / ETH / SOL</div>
           </div>
           <div>
-            <div className="metric-label">Leverage</div>
-            <input type="number" value={leverage} onChange={e=>setLeverage(e.target.value)} />
+            <div className="metric-label">Leverage / Direction</div>
+            <div className="metric-note mono">1x / LONG-CASH</div>
           </div>
           <div>
             <div className="metric-label">Starting Balance</div>
             <input type="number" value={initialUsdt} onChange={e=>setInitialUsdt(e.target.value)} />
           </div>
           <div>
-            <div className="metric-label">Mode / Strategy</div>
-            <div className="metric-note mono">{cfg.mode || '-'} / {cfg.strategy || '-'}</div>
+            <div className="metric-label">Target Volatility %</div>
+            <input type="number" min="1" max="25" value={targetVolatility} onChange={e=>setTargetVolatility(e.target.value)} />
           </div>
         </div>
         <div className="button-row" style={{marginTop:16}}>
@@ -145,7 +140,7 @@ export default function PaperPage(){
         <div className="section-title">Current Position Snapshot</div>
         <div className="mini-grid">
           <div><div className="metric-label">Side</div><div className="metric-value" style={{fontSize:24}}>{positionSummary.side}</div></div>
-          <div><div className="metric-label">Leverage</div><div className="metric-value mono" style={{fontSize:24}}>{fmt(cfg.leverage ?? leverage, 'x')}</div></div>
+          <div><div className="metric-label">Leverage</div><div className="metric-value mono" style={{fontSize:24}}>1.00x</div></div>
           <div><div className="metric-label">Entry</div><div className="metric-value mono" style={{fontSize:24}}>{positionSummary.entry}</div></div>
           <div><div className="metric-label">Exit / Current</div><div className="metric-value mono" style={{fontSize:24}}>{positionSummary.exit}</div></div>
           <div><div className="metric-label">PnL $</div><div className={`metric-value mono ${latestTradePnlClass}`} style={{fontSize:24}}>{positionSummary.pnl}</div></div>
@@ -154,7 +149,7 @@ export default function PaperPage(){
       </div>
 
       <div className="card span-4">
-        <div className="section-title">ML Signal Stack</div>
+        <div className="section-title">Advisory Signal Stack</div>
         <div className="metric-label">Long Score</div><div className="metric-value good mono">{fmt(s.long_score)}</div>
         <div className="metric-label" style={{marginTop:12}}>Short Score</div><div className="metric-value bad mono">{fmt(s.short_score)}</div>
       </div>

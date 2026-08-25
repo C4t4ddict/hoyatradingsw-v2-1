@@ -1,7 +1,8 @@
 import { fetchJson } from '../lib/api'
 
 function fmt(n, suffix = '') {
-  const v = Number(n || 0)
+  if (n === null || n === undefined || n === '') return '-'
+  const v = Number(n)
   return `${v.toFixed(2)}${suffix}`
 }
 
@@ -14,9 +15,12 @@ function buildRiskChip(risk){
 
 export default async function Page() {
   let overview = null, paper = null, risk = null
-  try { overview = await fetchJson('/api/overview') } catch {}
-  try { paper = await fetchJson('/api/paper') } catch {}
-  try { risk = await fetchJson('/api/risk') } catch {}
+  const responses = await Promise.allSettled([
+    fetchJson('/api/overview'), fetchJson('/api/paper'), fetchJson('/api/risk'),
+  ])
+  if (responses[0].status === 'fulfilled') overview = responses[0].value
+  if (responses[1].status === 'fulfilled') paper = responses[1].value
+  if (responses[2].status === 'fulfilled') risk = responses[2].value
 
   const s = overview?.summary || {}
   const b = overview?.market_brief || {}
@@ -77,7 +81,7 @@ export default async function Page() {
             <div><div className="metric-label">Timeframe</div><div className="metric-value" style={{fontSize:22}}>{paper?.executed_timeframe || '-'}</div></div>
             <div><div className="metric-label">Position Mode</div><div className="metric-value" style={{fontSize:22}}>{paper?.executed_position_mode || '-'}</div></div>
           </div>
-          <div style={{marginTop:16}} className="metric-note">즉시 반영이 중요한 paper config / symbol / leverage 상태를 운영 관점에서 표시</div>
+          <div style={{marginTop:16}} className="metric-note">Paper의 고정 universe, 1x long/cash 정책과 운영 상태를 함께 표시</div>
         </div>
 
         <div className="card span-8">
@@ -101,15 +105,15 @@ export default async function Page() {
 
         <div className="card span-4">
           <div className="section-title">Risk Snapshot</div>
-          <div className="metric-label">Open Positions</div>
+          <div className="metric-label">Logged Orders</div>
           <div className="metric-value mono">{s.total_trades || 0}</div>
-          <div className="section-sub">실시간 리스크 페이지에서 drawdown / daily loss / 실행 정책을 상세 확인</div>
+          <div className="section-sub">performance log의 주문 수이며, 현재 포지션 수와 구분한다. 실시간 리스크 정책은 Risk 페이지에서 확인한다.</div>
           <div className={`chip ${riskChip.className}`}>{riskChip.label}</div>
         </div>
 
         <div className="card span-12">
           <div className="section-title">Product Narrative</div>
-          <div className="section-sub">v2.1은 뉴스·거시·정책·트럼프/코인 발언을 기반으로 양방향 ML 예측을 수행하고, 이를 paper/live 운용 판단으로 연결하는 플랫폼이다.</div>
+          <div className="section-sub">v2.1은 뉴스·거시·정책 이벤트와 ML 신호를 검증 전까지 관찰 모드로 유지하고, 검증된 4시간봉 전략을 Paper 운용 및 제한된 Live 안전 제어와 연결한다.</div>
         </div>
       </div>
     </>

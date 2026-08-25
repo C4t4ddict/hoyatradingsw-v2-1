@@ -47,7 +47,7 @@ export default async function RiskPage(){
         <div className="section-title">Spot Risk Guardrail</div>
         <table className="table"><tbody>
           <Row label="enabled" value={spot.enabled} className={spot.enabled ? 'good mono' : 'bad mono'} />
-          <Row label="daily_loss_limit_pct" value={spot.daily_loss_limit_pct} className="mono" />
+          <Row label="daily_loss_limit_usdt" value={spot.daily_loss_limit_usdt} className="mono" />
           <Row label="max_consecutive_losses" value={spot.max_consecutive_losses} className="mono" />
           <Row label="max_open_positions" value={spot.max_open_positions} className="mono" />
         </tbody></table>
@@ -57,7 +57,7 @@ export default async function RiskPage(){
         <div className="section-title">Futures Risk Guardrail</div>
         <table className="table"><tbody>
           <Row label="enabled" value={futures.enabled} className={futures.enabled ? 'good mono' : 'bad mono'} />
-          <Row label="daily_loss_limit_pct" value={futures.daily_loss_limit_pct} className="mono" />
+          <Row label="daily_loss_limit_usdt" value={futures.daily_loss_limit_usdt} className="mono" />
           <Row label="max_consecutive_losses" value={futures.max_consecutive_losses} className="mono" />
           <Row label="max_open_positions" value={futures.max_open_positions} className="mono" />
           <Row label="max_leverage" value={futures.max_leverage} className="mono" />
