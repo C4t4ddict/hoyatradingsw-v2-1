@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 const navItems = [
   { href: '/', label: '대시보드' },
   { href: '/intel', label: '시장 인텔리전스' },
+  { href: '/backtest', label: '백테스트' },
   { href: '/paper', label: '모의투자' },
   { href: '/risk', label: '위험 관리' },
   { href: '/operations', label: '운영·보안' },

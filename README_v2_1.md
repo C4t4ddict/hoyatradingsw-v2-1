@@ -73,6 +73,14 @@ npm run dev
   - ml_signal
   - top events / live intel 요약
 
+### backtest
+- `POST /api/backtests/run`
+  - BTC/ETH/SOL 현물·USDT 무기한 선물 공개 OHLCV 기반 전략 검증
+  - 15분/1시간/4시간봉과 최대 3년 기간 지원
+  - 완료된 캔들만 사용하며 다음 봉 시가 체결, 수수료·슬리피지·펀딩을 반영
+  - 수익률, 동일 비용 Buy & Hold 대비 초과 성과, MDD, Sharpe, Profit Factor, 승률과 거래 내역 반환
+  - 계정 인증이나 실제 주문 API는 호출하지 않음
+
 ### paper
 - `GET /api/paper`
   - 현재 paper session 상태
@@ -175,13 +183,16 @@ npm run dev
 - `backend/app/routes/overview.py`
 - `backend/app/routes/intel.py`
 - `backend/app/routes/paper.py`
+- `backend/app/routes/backtests.py`
 - `backend/app/routes/account.py`
 - `backend/app/routes/risk.py`
 - `backend/app/services/paper_service.py`
+- `backend/app/services/backtest_service.py`
 - `paper_live.py`
 - `paper_live_runner.py`
 - `frontend/app/page.js`
 - `frontend/app/intel/page.js`
 - `frontend/app/paper/page.js`
+- `frontend/app/backtest/page.js`
 - `frontend/app/account/page.js`
 - `frontend/app/risk/page.js`
