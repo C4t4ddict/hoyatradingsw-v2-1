@@ -14,3 +14,5 @@ API endpoints:
 - `GET /api/ml/readiness`: audit dataset completeness, temporal leakage, label balance and validated model coverage.
 
 The Paper and Intel pages expose observation counts, Brier scores, dynamic weights, regime, position multiplier and ML readiness blockers so a neutral or reduced decision is explainable. Bidirectional models are ignored unless their bundle contains validation metadata produced by the chronological, purged holdout trainer.
+
+Historical market-pattern learning is a separate ML stream from news-event learning. It uses completed 4-hour public OHLCV bars, next-open entry labels, a newest-period holdout and a 24-hour purge gap. The recent 40% is also evaluated in four expanding walk-forward folds, with at least three passes required. Promotion requires classification improvement over the training-prior baseline and positive cost-adjusted holdout economics. Offline validation makes the model eligible for observation, while live `pattern` outcomes must still pass the signal-quality gate before the model receives decision weight.
