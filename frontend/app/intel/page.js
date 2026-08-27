@@ -52,6 +52,11 @@ export default async function IntelPage(){
   const readinessDataset = readiness.dataset || {}
   const readinessModels = readiness.models || {}
   const readinessTargets = readiness.targets || []
+  const patternReadiness = readiness.market_pattern || {}
+  const patternDataset = patternReadiness.dataset || {}
+  const patternModels = patternReadiness.models || {}
+  const patternPrediction = patternReadiness.latest_prediction || {}
+  const patternTargets = patternReadiness.targets || []
   const bestLong = [...rows].sort((a,b)=>(b.long_event_score||0)-(a.long_event_score||0))[0]
   const bestShort = [...rows].sort((a,b)=>(b.short_event_score||0)-(a.short_event_score||0))[0]
 
@@ -115,7 +120,43 @@ export default async function IntelPage(){
           <strong>현재 차단 사유</strong>
           <ul style={{marginBottom:0}}>{readiness.blockers.slice(0,6).map((reason,index)=><li key={index}>{reason}</li>)}</ul>
         </div> : null}
-        {readinessTargets.length > 0 ? <div className="table-scroll" style={{marginTop:18}}>
+        <div style={{marginTop:22,paddingTop:20,borderTop:'1px solid rgba(255,255,255,.08)'}}>
+          <div className="split">
+            <div>
+              <div className="section-title">과거 시장 패턴 학습</div>
+              <div className="section-sub">수년치 4시간봉 가격·거래량 패턴을 학습하고 최신 뉴스 모델과 별도로 검증합니다.</div>
+            </div>
+            <div className={`chip ${patternReadiness.inference_ready ? 'good' : 'warn'}`}>{koReadiness(patternReadiness.status)}</div>
+          </div>
+          <div className="mini-grid">
+            <div><div className="metric-label">과거 4시간봉</div><div className="metric-value mono" style={{fontSize:22}}>{patternDataset.rows ?? 0}</div><div className="metric-note">최소 {patternReadiness.thresholds?.minimum_rows ?? 1000}행 필요</div></div>
+            <div><div className="metric-label">검증 모델</div><div className="metric-value mono" style={{fontSize:22}}>{patternModels.validated ?? 0} / {patternModels.required ?? 4}</div><div className="metric-note">분류 성능과 비용 반영 수익성 동시 검증</div></div>
+            <div><div className="metric-label">학습 범위</div><div className="metric-value" style={{fontSize:18}}>{fmtDate(patternDataset.started_at)}<br/>~ {fmtDate(patternDataset.ended_at)}</div><div className="metric-note">완료된 봉만 포함</div></div>
+            <div><div className="metric-label">최신 패턴 판단</div><div className="metric-value" style={{fontSize:22}}>{koBias(patternPrediction.bias)}</div><div className="metric-note">검증 전에는 자동으로 중립</div></div>
+          </div>
+          {(patternReadiness.blockers||[]).length > 0 ? <div className="inline-error" style={{marginTop:16}}>
+            <strong>과거 패턴 차단 사유</strong>
+            <ul style={{marginBottom:0}}>{patternReadiness.blockers.slice(0,5).map((reason,index)=><li key={index}>{reason}</li>)}</ul>
+          </div> : null}
+          {patternTargets.length > 0 ? <div className="table-scroll" style={{marginTop:18}}>
+            <table className="table">
+              <thead><tr><th>패턴 예측</th><th>라벨 수</th><th>양성/음성</th><th>균형 정확도</th><th>비용 반영 Sharpe</th><th>워크포워드</th><th>검증</th></tr></thead>
+              <tbody>{patternTargets.map((target)=><tr key={target.target}>
+                <td>{koTarget(target.target)}</td>
+                <td className="mono">{target.rows}</td>
+                <td className="mono">{target.positives} / {target.negatives}</td>
+                <td className="mono">{target.balanced_accuracy == null ? '-' : Number(target.balanced_accuracy).toFixed(3)}</td>
+                <td className="mono">{target.net_sharpe == null ? '-' : Number(target.net_sharpe).toFixed(2)}</td>
+                <td className="mono">{target.walk_forward_passed_folds == null ? '-' : `${target.walk_forward_passed_folds} / ${target.walk_forward_required_passes}`}</td>
+                <td><span className={`chip ${target.model_validated ? 'good' : 'warn'}`}>{target.model_validated ? '통과' : '대기'}</span></td>
+              </tr>)}</tbody>
+            </table>
+          </div> : null}
+        </div>
+        {readinessTargets.length > 0 ? <div style={{marginTop:22,paddingTop:20,borderTop:'1px solid rgba(255,255,255,.08)'}}>
+          <div className="section-title">실시간 뉴스 이벤트 학습</div>
+          <div className="section-sub">시간이 지나며 새 뉴스와 실제 가격 반응을 계속 누적합니다.</div>
+          <div className="table-scroll">
           <table className="table">
             <thead><tr><th>예측 구간</th><th>라벨 수</th><th>상승/하락 사건</th><th>데이터</th><th>모델 검증</th></tr></thead>
             <tbody>{readinessTargets.map((target)=><tr key={target.target}>
@@ -126,6 +167,7 @@ export default async function IntelPage(){
               <td><span className={`chip ${target.model_validated ? 'good' : 'warn'}`}>{target.model_validated ? '통과' : '대기'}</span></td>
             </tr>)}</tbody>
           </table>
+          </div>
         </div> : null}
       </div>
 

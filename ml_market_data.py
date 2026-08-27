@@ -5,7 +5,7 @@ from math import ceil
 from typing import Iterable
 
 
-TIMEFRAME_MINUTES = {"5m": 5, "15m": 15, "1h": 60}
+TIMEFRAME_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240}
 
 
 def timeframe_ms(timeframe: str) -> int:

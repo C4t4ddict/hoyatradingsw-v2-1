@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from signal_quality import SignalQualityStore, analyze_market_regime
-from ml_readiness import get_ml_readiness
+from ml_readiness import get_hybrid_ml_readiness
 
 
 router = APIRouter()
@@ -41,15 +41,17 @@ def get_signal_quality():
     return {
         "intel": store.summary("intel"),
         "ml": store.summary("ml"),
+        "pattern": store.summary("pattern"),
         "intel_by_horizon": store.horizon_summaries("intel"),
         "ml_by_horizon": store.horizon_summaries("ml"),
+        "pattern_by_horizon": store.horizon_summaries("pattern"),
         "sources": store.source_reliability(),
     }
 
 
 @router.get('/api/ml/readiness')
 def get_model_readiness():
-    return get_ml_readiness()
+    return get_hybrid_ml_readiness()
 
 
 @router.post('/api/signals/outcomes')

@@ -59,6 +59,14 @@ class MlRetrainRunnerTests(unittest.TestCase):
         collect.assert_called_once()
         train.assert_called_once_with()
 
+    @patch("run_ml_retrain_8h.run_market_pattern_pipeline", return_value={"dataset_rows": 10})
+    @patch("run_ml_retrain_8h.run_training", return_value={"exit_code": 0})
+    @patch("run_ml_retrain_8h.collect_once", return_value={"news": {}, "labels": {}})
+    def test_first_cycle_can_refresh_historical_patterns(self, _, __, pattern):
+        result = run_ml_retrain_8h.run_cycle(refresh_market_patterns=True)
+        self.assertEqual(result["market_pattern"]["dataset_rows"], 10)
+        pattern.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

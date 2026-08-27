@@ -81,6 +81,49 @@ class MlSignalQualityTests(unittest.TestCase):
         self.assertEqual(result["quality_policy"]["weights"]["ml"], 0.0)
         self.assertEqual(result["decision"]["bias"], "neutral")
 
+    @patch("backend.app.services.ml_signal_service.predict_event_bidirectional")
+    @patch("backend.app.services.ml_signal_service.positive_probability", side_effect=lambda value: value["probability"])
+    def test_validated_market_pattern_can_supply_ml_component(self, _, predict):
+        predictions = {target: dict(value) for target, value in self.predictions.items()}
+        predictions["label_down_24h"]["ok"] = False
+        predict.return_value = predictions
+        result = build_signal_summary(
+            {"title": "event"}, {"long_score": 0.0, "short_score": 0.0},
+            quality_store=FakeStore({
+                "intel": self.quality(False),
+                "ml": self.quality(False),
+                "pattern": self.quality(True),
+            }),
+            market_pattern={"ready": True, "long_score": 0.80, "short_score": 0.10, "bias": "long"},
+        )
+
+        self.assertFalse(result["event_model_ready"])
+        self.assertTrue(result["pattern_model_ready"])
+        self.assertFalse(result["event_component_enabled"])
+        self.assertTrue(result["pattern_component_enabled"])
+        self.assertAlmostEqual(result["scores"]["ml_long_score"], 1.6)
+        self.assertEqual(result["quality_policy"]["weights"]["ml"], 1.0)
+        self.assertEqual(result["decision"]["trigger_source"], "market_pattern")
+
+    @patch("backend.app.services.ml_signal_service.predict_event_bidirectional")
+    @patch("backend.app.services.ml_signal_service.positive_probability", side_effect=lambda value: value["probability"])
+    def test_unvalidated_pattern_cannot_influence_validated_event_model(self, _, predict):
+        predict.return_value = self.predictions
+        result = build_signal_summary(
+            {"title": "event"}, {"long_score": 0.0, "short_score": 0.0},
+            quality_store=FakeStore({
+                "intel": self.quality(False),
+                "ml": self.quality(True),
+                "pattern": self.quality(False),
+            }),
+            market_pattern={"ready": True, "long_score": 0.01, "short_score": 0.99, "bias": "short"},
+        )
+
+        self.assertTrue(result["event_component_enabled"])
+        self.assertFalse(result["pattern_component_enabled"])
+        self.assertEqual(result["decision"]["trigger_source"], "ml")
+        self.assertGreater(result["scores"]["ml_long_score"], result["scores"]["ml_short_score"])
+
 
 if __name__ == "__main__":
     unittest.main()
