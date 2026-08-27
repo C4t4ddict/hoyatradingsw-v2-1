@@ -6,6 +6,14 @@ from signal_quality import SignalQualityStore, derive_signal_policy
 
 def build_signal_summary(event: dict, market_brief: dict = None, quality_store: SignalQualityStore = None, regime: dict = None) -> dict:
     predictions = predict_event_bidirectional(event) if event else {}
+    model_ready = bool(predictions) and all(
+        predictions.get(target, {}).get("ok") is True
+        for target in (
+            "label_up_5m", "label_down_5m", "label_up_15m", "label_down_15m",
+            "label_up_30m", "label_down_30m", "label_up_1h", "label_down_1h",
+            "label_up_4h", "label_down_4h", "label_up_24h", "label_down_24h",
+        )
+    )
     probability = {
         target: positive_probability(predictions.get(target))
         for target in (
@@ -34,7 +42,10 @@ def build_signal_summary(event: dict, market_brief: dict = None, quality_store: 
     intel_long = float((market_brief or {}).get("long_score", 0.0))
     intel_short = float((market_brief or {}).get("short_score", 0.0))
     store = quality_store or SignalQualityStore(os.getenv("SIGNAL_QUALITY_PATH", "data/signal_quality.sqlite3"))
-    policy = derive_signal_policy(store.summary("intel"), store.summary("ml"), regime=regime)
+    ml_quality = store.summary("ml")
+    if not model_ready:
+        ml_quality = {**ml_quality, "enabled": False, "readiness_blocked": True}
+    policy = derive_signal_policy(store.summary("intel"), ml_quality, regime=regime)
     intel_weight = policy["weights"]["intel"]
     ml_weight = policy["weights"]["ml"]
     exposure = policy["exposure_multiplier"]
@@ -103,4 +114,5 @@ def build_signal_summary(event: dict, market_brief: dict = None, quality_store: 
             "position_size_multiplier": exposure,
         },
         "quality_policy": policy,
+        "model_ready": model_ready,
     }

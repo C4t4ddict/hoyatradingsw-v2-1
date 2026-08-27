@@ -73,6 +73,9 @@ def _predict_one(event: dict, target_col: str):
         return {"ok": False, "reason": "model not found"}
 
     bundle = _load_model_bundle(model_path)
+    metadata = bundle.get("metadata") or {}
+    if metadata.get("validation_passed") is not True:
+        return {"ok": False, "reason": "model validation not passed"}
     prep = bundle["prep"]
     model = bundle["model"]
     row = {
@@ -99,6 +102,7 @@ def _predict_one(event: dict, target_col: str):
         "classes": classes,
         "positive_proba": positive_proba,
         "model_path": str(model_path),
+        "validation": metadata,
     }
 
 

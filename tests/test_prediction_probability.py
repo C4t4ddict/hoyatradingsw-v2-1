@@ -44,7 +44,11 @@ class PredictionProbabilityTests(unittest.TestCase):
                 with self.subTest(target=target, label=label), tempfile.TemporaryDirectory() as directory:
                     model_dir = Path(directory)
                     (model_dir / f"{target}.joblib").touch()
-                    bundle = {"prep": IdentityPreprocessor(), "model": SingleClassModel(label)}
+                    bundle = {
+                        "prep": IdentityPreprocessor(),
+                        "model": SingleClassModel(label),
+                        "metadata": {"validation_passed": True},
+                    }
                     with (
                         patch.object(predict_model_bidirectional, "MODEL_DIR", model_dir),
                         patch.object(predict_model_bidirectional.joblib, "load", return_value=bundle),
@@ -69,6 +73,23 @@ class PredictionProbabilityTests(unittest.TestCase):
                 predict_model_bidirectional.clear_model_cache(model_path)
                 predict_model_bidirectional._load_model_bundle(model_path)
                 self.assertEqual(load.call_count, 2)
+
+    def test_bidirectional_model_without_validation_metadata_is_rejected(self):
+        event = {"title": "test", "summary": "event"}
+        with tempfile.TemporaryDirectory() as directory:
+            model_dir = Path(directory)
+            model_path = model_dir / "label_up_5m.joblib"
+            model_path.touch()
+            bundle = {"prep": IdentityPreprocessor(), "model": SingleClassModel(1)}
+            predict_model_bidirectional.clear_model_cache()
+            with (
+                patch.object(predict_model_bidirectional, "MODEL_DIR", model_dir),
+                patch.object(predict_model_bidirectional.joblib, "load", return_value=bundle),
+            ):
+                result = predict_model_bidirectional._predict_one(event, "label_up_5m")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "model validation not passed")
 
     def test_positive_probability_uses_class_label_not_list_position(self):
         probabilities, classes, positive = predict_model_bidirectional._probability_payload(

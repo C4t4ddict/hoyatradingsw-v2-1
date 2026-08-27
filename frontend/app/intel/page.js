@@ -19,6 +19,17 @@ function fmtDate(v=''){
 
 function fmt(n){ return Number(n || 0).toFixed(2) }
 
+function koReadiness(status='collecting'){
+  return ({ready:'사용 가능', needs_training:'학습 필요', collecting:'데이터 수집 중', blocked:'점검 필요'})[status] || status
+}
+
+function koTarget(target=''){
+  const match = target.match(/^label_(up|down)_(.+)$/)
+  if(!match) return target
+  const horizon = ({'5m':'5분','15m':'15분','30m':'30분','1h':'1시간','4h':'4시간','24h':'24시간'})[match[2]] || match[2]
+  return `${horizon} ${match[1] === 'up' ? '상승' : '하락'}`
+}
+
 function NewsTitle({item}){
   if(!item) return '-'
   return <><div>{item.title_ko || item.title || '-'}</div>{item.title_ko && item.title_ko !== item.title ? <div className="metric-note" style={{marginTop:6}}>{item.title}</div> : null}</>
@@ -37,6 +48,10 @@ export default async function IntelPage(){
   const intelQuality = quality?.intel_quality || {}
   const mlQuality = quality?.ml_quality || {}
   const collection = b.collection_status || {}
+  const readiness = data?.ml_readiness || {}
+  const readinessDataset = readiness.dataset || {}
+  const readinessModels = readiness.models || {}
+  const readinessTargets = readiness.targets || []
   const bestLong = [...rows].sort((a,b)=>(b.long_event_score||0)-(a.long_event_score||0))[0]
   const bestShort = [...rows].sort((a,b)=>(b.short_event_score||0)-(a.short_event_score||0))[0]
 
@@ -80,6 +95,38 @@ export default async function IntelPage(){
           <div><div className="metric-label">포지션 배수</div><div className="metric-value mono" style={{fontSize:22}}>{fmt(Number(d.position_size_multiplier||0)*100)}%</div><div className="metric-note">시장 국면을 반영한 허용 노출</div></div>
           <div><div className="metric-label">판단 근거</div><div className="metric-value" style={{fontSize:22}}>{d.trigger_source==='quality_gate'?'품질 검증':(d.trigger_source||'-')}</div><div className="metric-note">검증 전에는 자동으로 중립 유지</div></div>
         </div>
+      </div>
+
+      <div className="card span-12">
+        <div className="split">
+          <div>
+            <div className="section-title">ML 학습 준비 상태</div>
+            <div className="section-sub">시점 누수·중복·결측·라벨 균형과 시간순 검증을 모두 통과한 모델만 신호에 사용합니다.</div>
+          </div>
+          <div className={`chip ${readiness.inference_ready ? 'good' : 'warn'}`}>{koReadiness(readiness.status)}</div>
+        </div>
+        <div className="mini-grid" style={{marginTop:14}}>
+          <div><div className="metric-label">데이터 관측치</div><div className="metric-value mono" style={{fontSize:22}}>{readinessDataset.rows ?? 0}</div><div className="metric-note">최소 {readiness.thresholds?.minimum_rows ?? 200}건 필요</div></div>
+          <div><div className="metric-label">검증 모델</div><div className="metric-value mono" style={{fontSize:22}}>{readinessModels.validated ?? 0} / {readinessModels.required ?? 12}</div><div className="metric-note">시간순 홀드아웃과 기준 모델 비교</div></div>
+          <div><div className="metric-label">중복 이벤트</div><div className="metric-value mono" style={{fontSize:22}}>{readinessDataset.duplicate_events ?? 0}</div><div className="metric-note">동일 이벤트 중복 학습 방지</div></div>
+          <div><div className="metric-label">시점 누수 행</div><div className={`metric-value mono ${(readinessDataset.feature_leakage_rows||0) > 0 ? 'bad' : 'good'}`} style={{fontSize:22}}>{readinessDataset.feature_leakage_rows ?? 0}</div><div className="metric-note">뉴스 이후 정보를 입력에 사용한 행</div></div>
+        </div>
+        {(readiness.blockers||[]).length > 0 ? <div className="inline-error" style={{marginTop:16}}>
+          <strong>현재 차단 사유</strong>
+          <ul style={{marginBottom:0}}>{readiness.blockers.slice(0,6).map((reason,index)=><li key={index}>{reason}</li>)}</ul>
+        </div> : null}
+        {readinessTargets.length > 0 ? <div className="table-scroll" style={{marginTop:18}}>
+          <table className="table">
+            <thead><tr><th>예측 구간</th><th>라벨 수</th><th>상승/하락 사건</th><th>데이터</th><th>모델 검증</th></tr></thead>
+            <tbody>{readinessTargets.map((target)=><tr key={target.target}>
+              <td>{koTarget(target.target)}</td>
+              <td className="mono">{target.rows}</td>
+              <td className="mono">{target.positives} / {target.negatives}</td>
+              <td><span className={`chip ${target.data_ready ? 'good' : 'warn'}`}>{target.data_ready ? '충족' : '부족'}</span></td>
+              <td><span className={`chip ${target.model_validated ? 'good' : 'warn'}`}>{target.model_validated ? '통과' : '대기'}</span></td>
+            </tr>)}</tbody>
+          </table>
+        </div> : null}
       </div>
 
       <div className="card span-4">

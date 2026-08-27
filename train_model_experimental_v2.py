@@ -5,10 +5,10 @@ from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import classification_report, precision_score, recall_score
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from xgboost import XGBClassifier
+from ml_training import chronological_purged_split
 
 DATASET_CSV = Path("data/ml_dataset.csv")
 MODEL_DIR = Path("data/models_experimental_v2")
@@ -29,13 +29,16 @@ def train_one(df: pd.DataFrame, target_col: str):
     sdf.loc[sdf.get("is_scheduled", False) == True, "sample_weight"] += 0.25
     sdf.loc[sdf.get("is_trump", False) == True, "sample_weight"] += 0.15
 
-    X = sdf[[
+    features = [
         "text", "source", "kind", "topic", "score", "trust", "is_trump", "is_scheduled",
         "market_ret_1h", "market_ret_4h", "market_volatility_12h", "market_volume_ratio",
         "text_len", "score_x_trust",
-    ]].copy()
-    y = sdf[target_col].astype(int)
-    w = sdf["sample_weight"].astype(float)
+    ]
+    try:
+        split = chronological_purged_split(sdf, target_col)
+    except ValueError as exc:
+        print(exc)
+        return None
 
     prep = ColumnTransformer([
         ("text", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2), "text"),
@@ -51,9 +54,11 @@ def train_one(df: pd.DataFrame, target_col: str):
         ]),
     ], sparse_threshold=0.3)
 
-    X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(
-        X, y, w, test_size=0.2, random_state=42, stratify=y
-    )
+    X_train = split.train[features].copy()
+    X_test = split.test[features].copy()
+    y_train = split.train[target_col].astype(int)
+    y_test = split.test[target_col].astype(int)
+    w_train = split.train["sample_weight"].astype(float)
     Xt_train = prep.fit_transform(X_train)
     Xt_test = prep.transform(X_test)
 
