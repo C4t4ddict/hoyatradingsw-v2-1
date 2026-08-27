@@ -11,5 +11,6 @@ API endpoints:
 - `GET /api/signals/quality`: aggregate and per-horizon quality gates plus source reliability.
 - `POST /api/signals/outcomes`: idempotently record a realized observation using `observation_id`.
 - `POST /api/signals/regime`: classify a supplied causal market window.
+- `GET /api/ml/readiness`: audit dataset completeness, temporal leakage, label balance and validated model coverage.
 
-The Paper and Intel pages expose observation counts, Brier scores, dynamic weights, regime and position multiplier so a neutral or reduced decision is explainable.
+The Paper and Intel pages expose observation counts, Brier scores, dynamic weights, regime, position multiplier and ML readiness blockers so a neutral or reduced decision is explainable. Bidirectional models are ignored unless their bundle contains validation metadata produced by the chronological, purged holdout trainer.

@@ -14,18 +14,18 @@ class FakeStore:
 
 class MlSignalQualityTests(unittest.TestCase):
     predictions = {
-        "label_up_5m": {"probability": 0.9},
-        "label_up_30m": {"probability": 0.8},
-        "label_up_1h": {"probability": 0.7},
-        "label_up_4h": {"probability": 0.6},
-        "label_up_24h": {"probability": 0.6},
-        "label_down_5m": {"probability": 0.1},
-        "label_down_15m": {"probability": 0.1},
-        "label_down_30m": {"probability": 0.2},
-        "label_down_1h": {"probability": 0.3},
-        "label_down_4h": {"probability": 0.4},
-        "label_down_24h": {"probability": 0.4},
-        "label_up_15m": {"probability": 0.8},
+        "label_up_5m": {"probability": 0.9, "ok": True},
+        "label_up_30m": {"probability": 0.8, "ok": True},
+        "label_up_1h": {"probability": 0.7, "ok": True},
+        "label_up_4h": {"probability": 0.6, "ok": True},
+        "label_up_24h": {"probability": 0.6, "ok": True},
+        "label_down_5m": {"probability": 0.1, "ok": True},
+        "label_down_15m": {"probability": 0.1, "ok": True},
+        "label_down_30m": {"probability": 0.2, "ok": True},
+        "label_down_1h": {"probability": 0.3, "ok": True},
+        "label_down_4h": {"probability": 0.4, "ok": True},
+        "label_down_24h": {"probability": 0.4, "ok": True},
+        "label_up_15m": {"probability": 0.8, "ok": True},
     }
 
     def quality(self, enabled):
@@ -65,6 +65,21 @@ class MlSignalQualityTests(unittest.TestCase):
         self.assertEqual(result["decision"]["position_size_multiplier"], 0.4)
         self.assertEqual(result["decision"]["bias"], "long")
         self.assertEqual(result["decision"]["trigger_source"], "ml")
+
+    @patch("backend.app.services.ml_signal_service.predict_event_bidirectional")
+    @patch("backend.app.services.ml_signal_service.positive_probability", side_effect=lambda value: value["probability"])
+    def test_incomplete_model_set_has_zero_ml_weight(self, _, predict):
+        predictions = {target: dict(value) for target, value in self.predictions.items()}
+        predictions["label_down_24h"]["ok"] = False
+        predict.return_value = predictions
+        result = build_signal_summary(
+            {"title": "event"}, {"long_score": 0.0, "short_score": 0.0},
+            quality_store=FakeStore({"intel": self.quality(False), "ml": self.quality(True)}),
+        )
+
+        self.assertFalse(result["model_ready"])
+        self.assertEqual(result["quality_policy"]["weights"]["ml"], 0.0)
+        self.assertEqual(result["decision"]["bias"], "neutral")
 
 
 if __name__ == "__main__":

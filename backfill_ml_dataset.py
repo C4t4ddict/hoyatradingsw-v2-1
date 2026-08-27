@@ -6,6 +6,7 @@ import feedparser
 from exchange import get_exchange
 from market_intel import _iter_sources, _clean, _event_score, _contains_any, TRUMP_WORDS, SCHEDULE_WORDS, _classify_topic
 from ml_dataset import append_events, load_events, enrich_with_price_labels
+from ml_market_data import fetch_ohlcv_range
 
 
 def main():
@@ -54,8 +55,10 @@ def main():
     print('backfill_rows=', len(rows), 'written=', written)
 
     ex = get_exchange(read_only=True, market_type='swap')
-    candles = ex.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=24 * 365)
-    df = enrich_with_price_labels(load_events(), candles)
+    candles_1h = fetch_ohlcv_range(ex, 'BTC/USDT:USDT', '1h', 365)
+    candles_15m = fetch_ohlcv_range(ex, 'BTC/USDT:USDT', '15m', 365)
+    candles_5m = fetch_ohlcv_range(ex, 'BTC/USDT:USDT', '5m', 365)
+    df = enrich_with_price_labels(load_events(), candles_1h, candles_5m, candles_15m)
     print('dataset_rows=', len(df))
 
 
