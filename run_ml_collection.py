@@ -11,6 +11,48 @@ INTERVAL_SEC = 300  # 5 minutes
 MAX_SECONDS = 8 * 60 * 60  # 8 hours
 LABEL_LOOKBACK_DAYS = int(os.getenv("ML_LABEL_LOOKBACK_DAYS", "30"))
 LABEL_REFRESH_SEC = int(os.getenv("ML_LABEL_REFRESH_SEC", "3600"))
+SYMBOL = os.getenv("ML_MARKET_SYMBOL", "BTC/USDT:USDT")
+
+
+def collect_news_once() -> dict:
+    items = fetch_items(per_source=12)
+    written = append_events(items)
+    return {"fetched": len(items), "written": written}
+
+
+def refresh_labels_once(*, now: datetime | None = None) -> dict:
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    exchange = get_exchange(read_only=True, market_type="swap")
+    events = load_events()
+    cutoff = current - timedelta(days=LABEL_LOOKBACK_DAYS)
+    recent_events = []
+    for event in events:
+        try:
+            event_time = datetime.fromisoformat(event["event_time"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        if event_time.astimezone(timezone.utc) >= cutoff:
+            recent_events.append(event)
+
+    candles_1h = fetch_ohlcv_range(exchange, SYMBOL, "1h", LABEL_LOOKBACK_DAYS + 2, now=current)
+    candles_15m = fetch_ohlcv_range(exchange, SYMBOL, "15m", LABEL_LOOKBACK_DAYS + 2, now=current)
+    candles_5m = fetch_ohlcv_range(exchange, SYMBOL, "5m", LABEL_LOOKBACK_DAYS + 2, now=current)
+    frame = enrich_with_price_labels(
+        recent_events,
+        candles_1h,
+        candles_5m,
+        candles_15m,
+        merge_existing=True,
+    )
+    return {
+        "events": len(recent_events),
+        "dataset_rows": len(frame),
+        "candles": {"1h": len(candles_1h), "15m": len(candles_15m), "5m": len(candles_5m)},
+    }
+
+
+def collect_once(*, now: datetime | None = None) -> dict:
+    return {"news": collect_news_once(), "labels": refresh_labels_once(now=now)}
 
 
 def main():
@@ -18,34 +60,19 @@ def main():
     last_label_refresh = 0.0
     while (time.time() - started) < MAX_SECONDS:
         try:
-            items = fetch_items(per_source=12)
-            written = append_events(items)
-            print(f"[{datetime.now(timezone.utc).isoformat()}] fetched={len(items)} written={written}", flush=True)
+            news = collect_news_once()
+            print(
+                f"[{datetime.now(timezone.utc).isoformat()}] fetched={news['fetched']} written={news['written']}",
+                flush=True,
+            )
 
             if time.time() - last_label_refresh >= LABEL_REFRESH_SEC:
                 last_label_refresh = time.time()
-                ex = get_exchange(read_only=True, market_type="swap")
-                events = load_events()
-                cutoff = datetime.now(timezone.utc) - timedelta(days=LABEL_LOOKBACK_DAYS)
-                recent_events = []
-                for event in events:
-                    try:
-                        event_time = datetime.fromisoformat(event["event_time"].replace("Z", "+00:00"))
-                    except (KeyError, ValueError):
-                        continue
-                    if event_time.astimezone(timezone.utc) >= cutoff:
-                        recent_events.append(event)
-                candles_1h = fetch_ohlcv_range(ex, "BTC/USDT:USDT", "1h", LABEL_LOOKBACK_DAYS + 2)
-                candles_15m = fetch_ohlcv_range(ex, "BTC/USDT:USDT", "15m", LABEL_LOOKBACK_DAYS + 2)
-                candles_5m = fetch_ohlcv_range(ex, "BTC/USDT:USDT", "5m", LABEL_LOOKBACK_DAYS + 2)
-                df = enrich_with_price_labels(
-                    recent_events,
-                    candles_1h,
-                    candles_5m,
-                    candles_15m,
-                    merge_existing=True,
+                labels = refresh_labels_once()
+                print(
+                    f"[{datetime.now(timezone.utc).isoformat()}] dataset_rows={labels['dataset_rows']}",
+                    flush=True,
                 )
-                print(f"[{datetime.now(timezone.utc).isoformat()}] dataset_rows={len(df)}", flush=True)
         except Exception as e:
             print(f"[{datetime.now(timezone.utc).isoformat()}] fetch_error={e}", flush=True)
 

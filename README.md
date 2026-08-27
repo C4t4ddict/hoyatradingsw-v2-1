@@ -435,6 +435,15 @@ python rebuild_dataset_multi_tf.py
 python train_model_bidirectional.py
 ```
 
+### 자동 수집·재학습
+```bash
+python run_ml_retrain_8h.py
+```
+- 계정 키 없이 공개 뉴스와 공개 OHLCV만 사용합니다.
+- 기본 8시간 동안 1시간 간격으로 최근 30일 데이터를 증분 병합하고 양방향 모델을 다시 검증합니다.
+- `ML_RETRAIN_MAX_SECONDS`, `ML_RETRAIN_INTERVAL_SEC`, `ML_LABEL_LOOKBACK_DAYS`로 실행 시간을 조정할 수 있습니다.
+- 기준을 통과하지 못한 모델은 저장하거나 신호에 사용하지 않습니다.
+
 ### 대시보드 ML 예측 카드
 - 최신 이벤트 기준으로 상승·하락 확률과 학습 준비 상태를 표시
 - 검증 메타데이터가 없거나 준비 기준을 통과하지 못한 모델은 ML 신호 가중치가 자동으로 0이 됨
