@@ -8,6 +8,7 @@ import pandas as pd
 
 from ml_dataset import DATASET_CSV
 from ml_training import MIN_CLASS_ROWS, MIN_ROWS
+from market_pattern import get_market_pattern_readiness
 
 
 MODEL_DIR = Path("data/models_bidirectional")
@@ -180,3 +181,8 @@ def get_ml_readiness(
     result["inference_ready"] = result["training_ready"] and validated_models == len(TARGETS)
     result["status"] = "ready" if result["inference_ready"] else ("needs_training" if result["training_ready"] else "collecting")
     return result
+
+
+def get_hybrid_ml_readiness() -> dict:
+    event_readiness = get_ml_readiness()
+    return {**event_readiness, "market_pattern": get_market_pattern_readiness()}

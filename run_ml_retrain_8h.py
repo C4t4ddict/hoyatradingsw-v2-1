@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from run_ml_collection import collect_once
+from run_market_pattern_pipeline import run_pipeline as run_market_pattern_pipeline
 
 
 ROOT = Path(__file__).resolve().parent
@@ -34,15 +35,17 @@ def run_training(command: list[str] | None = None) -> dict:
     }
 
 
-def run_cycle() -> dict:
+def run_cycle(*, refresh_market_patterns: bool = False) -> dict:
     started_at = datetime.now(timezone.utc)
     collection = collect_once(now=started_at)
     training = run_training()
+    market_pattern = run_market_pattern_pipeline() if refresh_market_patterns else None
     return {
         "started_at": started_at.isoformat(),
         "ok": training["exit_code"] == 0,
         "collection": collection,
         "training": training,
+        "market_pattern": market_pattern,
     }
 
 
@@ -51,9 +54,11 @@ def main() -> None:
         raise ValueError("ML retrain duration and interval must be positive")
 
     started = time.monotonic()
+    pattern_refreshed = False
     while time.monotonic() - started < MAX_SECONDS:
         try:
-            result = run_cycle()
+            result = run_cycle(refresh_market_patterns=not pattern_refreshed)
+            pattern_refreshed = pattern_refreshed or result.get("market_pattern") is not None
         except Exception as exc:
             result = {
                 "started_at": datetime.now(timezone.utc).isoformat(),
