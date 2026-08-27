@@ -2,6 +2,7 @@ from market_intel import get_market_brief
 from backend.app.services.ml_signal_service import build_signal_summary
 from predict_model import predict_event
 from backend.app.services.news_translation_service import localize_market_brief
+from ml_readiness import get_ml_readiness
 
 
 def get_intel_payload():
@@ -15,4 +16,5 @@ def get_intel_payload():
         'ml_pred': ml,
         'ml_signal': signal,
         'signal_quality': signal.get('quality_policy', {}),
+        'ml_readiness': get_ml_readiness(),
     }

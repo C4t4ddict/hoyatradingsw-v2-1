@@ -415,23 +415,29 @@ streamlit run dashboard.py
 ## 무료 ML 예측 파이프라인 (v2)
 - `ml_dataset.py`
   - 수집 이벤트 저장(`data/ml_events.jsonl`)
-  - BTC 가격 반응 라벨링(`1h/4h/24h`)
+  - 이벤트 공개 이후 첫 관측 가능한 시가부터 BTC 가격 반응 라벨링(`5m/15m/30m/1h/4h/24h`, 상승·하락)
+  - 이벤트 이전에 완전히 종료된 봉만 시장 특성으로 사용
   - 학습 CSV 생성(`data/ml_dataset.csv`)
-- `train_model.py`
-  - TF-IDF + RandomForest 기반 무료 로컬 학습
-- `predict_model.py`
-  - 저장된 모델로 개별 이벤트 상승 확률 예측
+- `rebuild_dataset_multi_tf.py`
+  - 공개 OHLCV를 거래소 호출 제한에 맞춰 페이지네이션하고 미완성 봉을 제외해 전체 데이터셋 재생성
+- `train_model_bidirectional.py`
+  - TF-IDF + HistGradientBoosting 기반 무료 로컬 학습
+  - 최신 기간 홀드아웃과 24시간 퍼지 구간으로 시계열 누수 방지
+  - 균형 정확도와 Brier 점수가 기준 모델을 통과한 모델만 저장
+- `GET /api/ml/readiness`
+  - 중복·결측·미래 시점·특성 누수·라벨 균형·모델 검증 상태 확인
 
 ### 학습 실행
 ```bash
-cd HoyaTradingSW_v2
+cd hoyatradingsw-v2-1
 pip install -r requirements.txt
-python train_model.py
+python rebuild_dataset_multi_tf.py
+python train_model_bidirectional.py
 ```
 
 ### 대시보드 ML 예측 카드
-- 최신 이벤트 기준으로 `1h / 4h / 24h 상승확률` 표시
-- 모델이 아직 없거나 학습 데이터가 부족하면 0%로 표시될 수 있음
+- 최신 이벤트 기준으로 상승·하락 확률과 학습 준비 상태를 표시
+- 검증 메타데이터가 없거나 준비 기준을 통과하지 못한 모델은 ML 신호 가중치가 자동으로 0이 됨
 
 ### ML 진입 필터 (v2)
 - `ML_FILTER_ENABLED=true`면 최신 이벤트의 ML 예측 확률을 함께 사용
