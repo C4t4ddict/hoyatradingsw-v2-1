@@ -62,7 +62,28 @@ class PaperServiceTests(unittest.TestCase):
         self.assertEqual(payload["strategy_decision"]["target_weights"]["BTC/USDT"], 0.4)
         self.assertEqual(payload["risk_status"]["pending_count"], 1)
         self.assertEqual(payload["pending_orders"][0]["order_id"], "one")
+        self.assertIsNone(payload["portfolio"])
+        self.assertIsNone(payload["last_update"])
         _brief.assert_called_once_with(force_refresh=False)
+
+    @patch("backend.app.services.paper_service.get_market_brief", return_value={"top": []})
+    @patch("backend.app.services.paper_service.load_paper_state")
+    def test_payload_uses_actual_units_and_omits_closed_positions(self, load, _brief):
+        load.return_value = {
+            "last_update": "2026-11-19T12:00:00+00:00",
+            "event_engine": {"portfolio": {
+                "cash": 650, "units": {"BTC/USDT": 0.003, "SOL/USDT": 0},
+                "average_cost": {"BTC/USDT": 78000, "SOL/USDT": 125},
+            }},
+            "strategy_decision": {"target_weights": {"SOL/USDT": 0.1}},
+        }
+
+        payload = paper_service.get_paper_payload()
+
+        self.assertEqual(payload["last_update"], "2026-11-19T12:00:00+00:00")
+        self.assertEqual(payload["portfolio"], {"cash": 650, "positions": [
+            {"symbol": "BTC/USDT", "units": 0.003, "average_cost": 78000},
+        ]})
 
 
 class PaperLiveIntegrationTests(unittest.TestCase):
