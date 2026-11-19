@@ -34,6 +34,9 @@ def _safe_paper_config(overrides: dict = None):
 
 def get_paper_payload():
     state = load_paper_state()
+    portfolio = ((state.get('event_engine') or {}).get('portfolio') or {})
+    units = portfolio.get('units') or {}
+    costs = portfolio.get('average_cost') or {}
     brief = get_market_brief(force_refresh=False)
     latest_event = ((brief.get('top') or [{}])[0])
     ml_signal = build_signal_summary(latest_event, brief, regime=state.get('market_regime')) if latest_event else {}
@@ -52,6 +55,14 @@ def get_paper_payload():
         'strategy_decision': state.get('strategy_decision'),
         'risk_status': state.get('risk_status'),
         'daily_loss_limit_pct': float((state.get('config') or {}).get('daily_loss_limit_pct', 0.02)),
+        'last_update': state.get('last_update'),
+        'portfolio': {
+            'cash': portfolio.get('cash'),
+            'positions': [
+                {'symbol': symbol, 'units': quantity, 'average_cost': costs.get(symbol)}
+                for symbol, quantity in sorted(units.items()) if quantity > 0
+            ],
+        } if portfolio else None,
         'order_events': state.get('order_events') or [],
         'pending_orders': ((state.get('event_engine') or {}).get('pending_orders') or []),
         'market_regime': state.get('market_regime'),

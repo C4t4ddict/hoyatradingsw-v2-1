@@ -50,7 +50,7 @@ export function DetailTable({ columns, rows, empty = '표시할 기록이 없습
 
 export function SignalResults({ signals }) {
   const totals = signals?.totals ?? []
-  const labels = { intel_shadow: '뉴스 관찰', ml_shadow: 'ML 관찰' }
+  const labels = { intel_shadow: '뉴스 관찰', ml_shadow: 'ML 관찰', strategy_shadow: '전략 관찰' }
   return <>
     {totals.length > 0 && <div className="terminal-summary">{totals.map(row => <span key={row.kind}>
       {labels[row.kind] || row.kind} · 정산 {row.resolved} / {row.total}
