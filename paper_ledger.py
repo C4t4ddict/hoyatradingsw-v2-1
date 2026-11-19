@@ -173,6 +173,15 @@ class TradingLedger:
             ).fetchone()
         return row is not None
 
+    def filled_orders(self, session_id: str):
+        """Full session history for accounting, independent of display limits."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM trading_events WHERE session_id=? AND environment='paper' AND event_type='order_filled' ORDER BY sequence",
+                (session_id,),
+            ).fetchall()
+        return [json.loads(row['payload_json']) for row in rows]
+
     def list_events(
         self,
         *,

@@ -1,5 +1,13 @@
 # HoyaTradingSW v2.1
 
+## 지속 수집·페이퍼 평가 (2026-11-19)
+
+- 설계: [데이터·페이퍼·신호 고도화](docs/RUNTIME_UPGRADE_DESIGN.md)
+- 실행: [개발환경 및 운영 가이드](docs/RUNTIME_OPERATIONS.md)
+- `powershell -File scripts/dev.ps1`: 웹·API·공개 수집기 실행
+- 운영·보안 화면: 시세 백필·소스별 장애·28일/60청산 관측·신호 결과 추적
+- 테스트는 `python scripts/test_changed.py --base origin/develop`, 프론트는 일반 `npm run build` 사용
+
 - 목표: Streamlit UI에서 FastAPI + Next.js UI 구조로 이관
 - 방향: 토스 스타일 UX, 모의투자/시장 인텔/실시간 계정 중심
 - 기존 엔진: 유지

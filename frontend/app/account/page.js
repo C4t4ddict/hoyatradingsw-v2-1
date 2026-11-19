@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { koPosition } from '../../lib/ko'
 
-const BASE='http://127.0.0.1:8010'
+import { API_BASE as BASE } from '../../lib/api'
 function fmt(n,suffix=''){ if(n===null||n===undefined||n==='') return '-'; const value=Number(n); return Number.isNaN(value)?'-':`${value.toFixed(2)}${suffix}` }
 
 export default function AccountPage(){

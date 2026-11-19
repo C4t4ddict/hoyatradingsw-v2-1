@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { koAlertMessage, koCategory, koStatus } from '../../lib/ko'
 
-const BASE = 'http://127.0.0.1:8010'
+import { API_BASE as BASE } from '../../lib/api'
+import RuntimePanel from './RuntimePanel'
 const SECRET_NAMES = [
   'API_KEY','API_SECRET','WEBHOOK_TOKEN','ALERT_TELEGRAM_BOT_TOKEN',
   'ALERT_TELEGRAM_CHAT_ID','PAPER_ALERT_TELEGRAM_BOT_TOKEN','PAPER_ALERT_TELEGRAM_CHAT_ID',
@@ -101,6 +102,7 @@ export default function OperationsPage(){
     <p className="page-sub">민감정보는 표시하지 않으며, 실거래는 설정 토큰과 두 번의 명시적 확인을 모두 통과해야 제한 시간 동안만 활성화됩니다.</p>
     {message&&<div className="card soft" style={{marginBottom:18,padding:14}}>{message}</div>}
 
+    <RuntimePanel settingsToken={settingsToken} />
     <div className="grid">
       <div className="card span-3 emphasis"><div className="metric-label">작업자</div><div className={`metric-value ${worker.alive?'good':'bad'}`}>{worker.alive?'정상':'중지'}</div><div className="metric-note">PID {worker.pid||'-'}</div></div>
       <div className="card span-3"><div className="metric-label">원장 무결성</div><div className={`metric-value ${integrity.ok?'good':'bad'}`}>{integrity.ok?'정상':'실패'}</div><div className="metric-note">이벤트 {integrity.events_checked||0}건 확인</div></div>

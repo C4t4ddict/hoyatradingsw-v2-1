@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [develop]
   pull_request:
     branches:
       - develop
@@ -22,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,7 +36,10 @@ jobs:
           if [[ -f research/requirements.txt ]]; then
             python -m pip install -r research/requirements.txt
           fi
-      - run: python -m unittest discover -s tests -v
+      - name: Test changed modules and their dependents
+        env:
+          TEST_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python scripts/test_changed.py --base "$TEST_BASE"
       - run: python -m compileall backend
       - run: bash -n run_all.sh
       - name: Compile root Python modules
@@ -57,4 +63,5 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build
