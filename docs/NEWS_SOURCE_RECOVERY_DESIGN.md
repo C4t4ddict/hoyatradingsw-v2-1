@@ -47,4 +47,7 @@ Treasury HTML은 main 내부 div의 time과 headline을 한 항목으로 매칭�
 
 ## 6. 검증 기록
 
-구현 후 실행 결과와 PR 링크를 추가한다.
+- 이슈: [#59](https://github.com/C4t4ddict/hoyatradingsw-v2-1/issues/59). 설계 선행 커밋: `a73bf03`.
+- `scripts/test_changed.py --base origin/develop`: 변경 모듈을 참조하는 8개 테스트 파일의 64개 테스트 통과. 새 소스 복구 회귀 테스트 11개 포함.
+- 공개 수집 smoke: Reuters Business 1건, Reuters World 2건, Treasury 2건의 기존 점수 필터 통과 이벤트를 확인했다. 기존 RSS 파싱 검증의 영향을 확인하기 위해 나머지 기본 소스 4개도 검사했으며 7개 모두 오류 없이 종료했다. SEC의 필터 통과 이벤트 0건은 유효한 RSS 수신 후 결과다.
+- 프론트엔드 변경이 없어 로컬 프론트엔드 빌드는 생략한다. CI의 일반 빌드 결과와 운영 재시작 후 상태를 PR에 기록한다.

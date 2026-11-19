@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 import feedparser
 from signal_quality import SignalQualityStore, deduplicate_events, weight_events_by_source
+from news_sources import publisher_matches, treasury_entries
 
 CACHE_PATH = Path(os.getenv("MARKET_INTEL_CACHE_PATH", "data/market_intel_cache.json"))
 CACHE_TTL_SEC = int(os.getenv("MARKET_INTEL_CACHE_TTL_SEC", "300"))
@@ -27,16 +28,26 @@ class Source:
     url: str
     kind: str  # news | official | tweet
     trust: float
+    transport: str = 'rss'
+    publisher_domain: str = ''
+
+
+def _google_news_rss(query: str) -> str:
+    q = urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    return f"https://news.google.com/rss/search?{q}"
 
 
 DEFAULT_SOURCES: List[Source] = [
-    Source("Reuters Business", "https://feeds.reuters.com/reuters/businessNews", "news", 0.95),
-    Source("Reuters World", "https://feeds.reuters.com/Reuters/worldNews", "news", 0.95),
+    Source("Reuters Business", _google_news_rss('site:reuters.com/business when:7d'), "news", 0.95,
+           transport='google_news_rss', publisher_domain='reuters.com'),
+    Source("Reuters World", _google_news_rss('site:reuters.com/world when:7d'), "news", 0.95,
+           transport='google_news_rss', publisher_domain='reuters.com'),
     Source("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/", "news", 0.85),
     Source("The Block", "https://www.theblock.co/rss.xml", "news", 0.85),
     Source("Federal Reserve Press", "https://www.federalreserve.gov/feeds/press_all.xml", "official", 1.0),
     Source("SEC Press", "https://www.sec.gov/news/pressreleases.rss", "official", 0.98),
-    Source("U.S. Treasury", "https://home.treasury.gov/news/press-releases/rss", "official", 0.97),
+    Source("U.S. Treasury", "https://home.treasury.gov/news/press-releases", "official", 0.97,
+           transport='treasury_html'),
 ]
 
 
@@ -102,11 +113,6 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 
-def _google_news_rss(query: str) -> str:
-    q = urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
-    return f"https://news.google.com/rss/search?{q}"
-
-
 def _iter_sources() -> List[Source]:
     extra = os.getenv("MARKET_INTEL_EXTRA_RSS", "").strip()
     tweet_rss = os.getenv("MARKET_INTEL_TWEET_RSS", "").strip()
@@ -157,12 +163,23 @@ def _parse_source(src: Source, per_source: int, timeout_sec: float) -> List[Dict
     request = Request(src.url, headers={"User-Agent": "HoyaTradingSW/2.1 market-intel"})
     with urlopen(request, timeout=max(0.1, timeout_sec)) as response:
         payload = response.read()
-    feed = feedparser.parse(payload)
-    for entry in (feed.entries or [])[:per_source]:
-        title = _clean(getattr(entry, "title", ""))
-        summary = _clean(getattr(entry, "summary", ""))
-        link = getattr(entry, "link", "")
-        published = getattr(entry, "published", "")
+    if src.transport == 'treasury_html':
+        entries = treasury_entries(payload)
+    else:
+        feed = feedparser.parse(payload)
+        if not feed.get('version') or (feed.get('bozo') and not feed.entries):
+            raise ValueError(f'{src.name}: response is not a usable RSS/Atom feed')
+        entries = feed.entries or []
+    if src.publisher_domain:
+        entries = [entry for entry in entries
+                   if publisher_matches((entry.get('source') or {}).get('href', ''), src.publisher_domain)]
+    for entry in entries[:per_source]:
+        title = _clean(entry.get("title", ""))
+        summary = _clean(entry.get("summary", ""))
+        link = entry.get("link", "")
+        published = entry.get("published", "")
+        if src.publisher_domain and not str(link).startswith('https://'):
+            continue
         score = _event_score(title, summary, src.trust)
         if score == 0.0:
             continue
@@ -172,6 +189,9 @@ def _parse_source(src: Source, per_source: int, timeout_sec: float) -> List[Dict
             "event_id": event_id,
             "event_time": datetime.now(timezone.utc).isoformat(),
             "source": src.name,
+            "source_transport": src.transport,
+            "source_url": src.url,
+            "publisher_url": (entry.get('source') or {}).get('href'),
             "kind": src.kind,
             "topic": topic,
             "title": title,

@@ -39,7 +39,8 @@ def collect_news(store):
                               direction=-1 if '_down_' in target else 1,
                               probability=positive_probability(result), source=f'{source.name}|{version}',
                               threshold=.015 if horizon == 4 else .025, now_ms=observed_ms)
-        return dict(fetched=len(events), written=written)
+        return dict(fetched=len(events), written=written,
+                    source_url=source.url, transport=source.transport)
 
     for source in _iter_sources():
         store.run_job(f'news:{source.name}', lambda source=source: source_job(source), 300)

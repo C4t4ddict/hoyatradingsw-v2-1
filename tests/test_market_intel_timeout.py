@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import market_intel
+from feedparser import FeedParserDict
 from market_intel import Source
 
 
@@ -27,7 +28,7 @@ class MarketIntelTimeoutTests(unittest.TestCase):
     @patch("market_intel.feedparser.parse")
     @patch("market_intel.urlopen", return_value=_Response())
     def test_source_connection_receives_explicit_timeout(self, urlopen, parse):
-        parse.return_value.entries = []
+        parse.return_value = FeedParserDict(version='rss20', bozo=False, entries=[])
         market_intel._parse_source(Source("one", "https://example.test/rss", "news", 1.0), 8, 1.25)
 
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 1.25)
