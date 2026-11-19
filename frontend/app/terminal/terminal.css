@@ -64,7 +64,7 @@
 .terminal-chart-footer input { flex: 1; min-width: 40px; padding: 0; border: 0; accent-color: #65cdaa; }
 .terminal-legend span { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .terminal-legend i { width: 7px; height: 7px; border-radius: 50%; }
-.terminal-marker-detail { margin: 0; padding: 6px 12px 6px 26px; max-height: 64px; overflow: auto; color: var(--terminal-muted); font-size: 11px; }
+.terminal-marker-detail { margin: 0; padding: 6px 12px 6px 26px; max-height: 64px; overflow: auto; color: var(--terminal-muted); font-size: 11px; scrollbar-color: #445773 var(--terminal-plot); }
 .terminal-chart-empty { display: grid; place-items: center; min-height: 310px; color: var(--terminal-muted); padding: 14px; text-align: center; }
 .terminal-tabs-bar { display: flex; gap: 2px; padding: 2px 7px 0; border-bottom: 1px solid var(--terminal-line); overflow: auto; }
 .terminal-tabs-bar button { min-height: 35px; border-radius: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
