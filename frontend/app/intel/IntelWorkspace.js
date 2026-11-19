@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { koBias, koTopic } from '../../lib/ko'
-import { filterNews, newsMarkers } from '../../lib/intel-feed.mjs'
+import { filterNews, impactScores, newsMarkers } from '../../lib/intel-feed.mjs'
 import { eventTime, number, percent, safeNewsLink, timeLabel } from '../../lib/trading-chart.mjs'
 import CandleChart from '../terminal/CandleChart'
 import { DetailTable, MetricStrip, SignalDetails, Tabs } from '../terminal/Terminal'
@@ -28,12 +28,13 @@ function Facts({ items }) {
 function EventDetail({ item }) {
   if (!item) return <p className="terminal-empty">뉴스를 선택하면 발행·관측 시각과 원문을 볼 수 있습니다.</p>
   const href = safeNewsLink(item.link)
+  const impact = impactScores(item)
   return <div className="intel-event-detail">
     <p className="intel-item-meta">발행 {timeLabel(item.published)} · 관측 {timeLabel(item.event_time)} KST</p>
     <strong>{item.title_ko || item.title || '제목 없음'}</strong>
     {item.title_ko && item.title_ko !== item.title && <p className="intel-item-meta">{item.title}</p>}
     <div className="intel-scores">
-      <span className="good">상승 {number(item.long_event_score)}</span><span className="bad">하락 {number(item.short_event_score)}</span>
+      <span className="good">상승 {number(impact.up)}</span><span className="bad">하락 {number(impact.down)}</span>
       {href && <a href={href} target="_blank" rel="noreferrer">원문 열기 ↗</a>}
     </div>
   </div>

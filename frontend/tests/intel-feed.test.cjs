@@ -14,3 +14,11 @@ test('topic and source filters combine and markers use publication time only', a
     { time: Date.parse('2026-11-20T08:30:00Z'), kind: 'news', label: '금리 발표' },
   ])
 })
+
+test('published news renders directional scores from signed input and distinguishes missing scores', async () => {
+  const { impactScores } = await import('../lib/intel-feed.mjs')
+  assert.deepEqual(impactScores({ score: -1.02 }), { up: 0, down: 1.02 })
+  assert.deepEqual(impactScores({ score: 0.5 }), { up: 0.5, down: 0 })
+  assert.deepEqual(impactScores({ score: 0.5, long_event_score: 0 }), { up: 0, down: 0 })
+  assert.deepEqual(impactScores({}), { up: null, down: null })
+})
