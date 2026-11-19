@@ -62,7 +62,7 @@ PR 대상은 일반 작업이면 `develop`, 긴급 수정이면 `main`입니다.
 [Chore] #17 로컬 실행 환경과 협업 규칙 정비
 ```
 
-PR 본문은 `.github/pull_request_template.md`를 사용해 변경 내용, 검증 명령, 거래 안전 영향, 화면 변경을 기록합니다. 일반 작업은 Squash and merge를 기본으로 하며 squash 제목도 커밋 컨벤션을 따릅니다.
+PR 본문은 `.github/pull_request_template.md`를 사용해 변경 내용, 검증 명령, 거래 안전 영향, 화면 변경을 기록합니다. 기능 변경은 먼저 `docs/`에 MD 설계를 작성·커밋한 뒤 요구사항 ID를 기준으로 구현합니다. 사용자 운영 방침에 따라 테스트 통과 후 일반 merge commit으로 병합하며 squash를 사용하지 않습니다.
 
 ## 변경 전후 검증
 
