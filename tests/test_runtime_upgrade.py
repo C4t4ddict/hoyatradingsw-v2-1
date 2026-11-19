@@ -1,4 +1,6 @@
 import tempfile
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -194,6 +196,33 @@ class RuntimeTests(unittest.TestCase):
                 runtime_control(RuntimeControl(action='pause'),x_settings_token='wrong')
             self.assertEqual(caught.exception.status_code, 401)
         self.assertTrue(self.store.status()['worker']['enabled'])
+
+    def test_windows_health_query_closes_handle_without_signalling(self):
+        import paper_live
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 42
+        def exit_code(handle, code):
+            code._obj.value = 259
+            return True
+        kernel.GetExitCodeProcess.side_effect = exit_code
+        with patch('ctypes.WinDLL', return_value=kernel, create=True), patch('os.kill') as kill:
+            self.assertTrue(paper_live._windows_pid_alive(123))
+        kernel.OpenProcess.assert_called_once_with(0x1000, False, 123)
+        kernel.CloseHandle.assert_called_once_with(42)
+        kill.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows process liveness regression')
+    def test_health_check_does_not_terminate_real_windows_process(self):
+        import paper_live
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+        try:
+            self.assertTrue(paper_live._is_pid_alive(child.pid))
+            self.assertTrue(paper_live._is_pid_alive(child.pid))
+            self.assertIsNone(child.poll())
+        finally:
+            child.terminate()
+            child.wait(timeout=10)
 
 
 if __name__ == '__main__':
