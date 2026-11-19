@@ -783,6 +783,13 @@ def select_ml_execution_policy(
     return {"hold": True, "fallback_mode": "neutral_wait_quality_gate", "strategy": "hold", "timeframe": "15m", "position_mode": "flat"}
 
 
+def _paper_candles(exchange, symbol, start_iso, end_iso):
+    from runtime_data import RuntimeStore
+    store = RuntimeStore()
+    # Collection is owned by run_runtime.py; the trading loop never waits on backfill.
+    return store.candles(symbol)
+
+
 def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path: str) -> Dict[str, Any]:
     """Advance the portfolio only from confirmed 4h closes and next-bar opens."""
     now = datetime.now(timezone.utc)
@@ -790,11 +797,11 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
     end_iso = now.isoformat()
     start_iso = (now - timedelta(days=230)).isoformat()
     symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-    exchange = get_exchange(read_only=True, market_type="spot")
+    exchange = None
     histories: Dict[str, Any] = {}
     for symbol in symbols:
         try:
-            candles = fetch_ohlcv(exchange, symbol, "4h", start_iso, end_iso)
+            candles = _paper_candles(exchange, symbol, start_iso, end_iso)
         except Exception:
             candles = []
         histories[symbol] = [row for row in candles if int(row[0]) + FOUR_HOURS_MS <= now_ms]
@@ -832,6 +839,26 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
     if state.get("event_engine"):
         engine.restore(state["event_engine"])
 
+    # Never mark a held asset at zero or fill pending orders with incomplete/stale prices.
+    preview = strategy.evaluate(histories, now_ms)
+    expected_bar = now_ms // FOUR_HOURS_MS * FOUR_HOURS_MS - FOUR_HOURS_MS
+    stale = any(not rows or int(rows[-1][0]) != expected_bar for rows in histories.values())
+    if not preview.data_quality['ok'] or stale:
+        from dataclasses import asdict
+        decision = asdict(preview)
+        decision['data_quality']['ok'] = False
+        if stale:
+            decision['data_quality']['errors'].append('stale_market_data')
+        state['strategy_decision'] = decision
+        state['event_engine'] = engine.snapshot()
+        state['risk_status'] = {'data_quality': decision['data_quality']}
+        state['fallback_mode'] = 'data_quality_hold'
+        state['last_update'] = _now_iso()
+        save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
+        return state
+
     fills = []
     available = {symbol: rows[-1] for symbol, rows in histories.items() if rows}
     if available:
@@ -859,7 +886,7 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
         "pending_count": len(engine.pending_orders),
         "drawdown_pct": 1.0 - nav / max(engine.portfolio.equity_peak, 1e-9),
     }
-    filled_events = [event for event in state["order_events"] if event.get("status") == "filled"]
+    filled_events = ledger.filled_orders(state['session_id'])
     state["metrics"] = {
         "virtual_balance": nav,
         "starting_balance": initial,
@@ -890,6 +917,8 @@ def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path:
     _append_checkpoint(state)
     save_state(state, path)
     _persist_session_snapshot(state)
+    from runtime_evaluation import EvaluationStore
+    EvaluationStore().record_paper(state, filled_events, now_ms=now_ms)
     _release_lock()
     return state
 

@@ -223,6 +223,7 @@ class EventDrivenPaperEngine:
         self.pending_orders: List[Dict[str, Any]] = []
         self.last_rebalance_ms: Optional[int] = None
         self.last_signal_ms: Optional[int] = None
+        self.pnl_day = None
 
     def on_bar_close(
         self,
@@ -315,12 +316,23 @@ class EventDrivenPaperEngine:
         return {"decision": asdict(decision), "orders": orders, "rebalance_due": True}
 
     def on_bar_open(self, *, timestamp_ms: int, open_prices: Dict[str, float]) -> List[Dict[str, Any]]:
+        day = _iso(timestamp_ms)[:10]
+        if self.pnl_day != day:
+            self.portfolio.daily_realized_pnl = 0.0
+            self.pnl_day = day
         executions = []
         remaining = []
         for order in self.pending_orders:
             symbol = order["symbol"]
             if timestamp_ms < order["execute_after_ms"] or symbol not in open_prices:
                 remaining.append(order)
+                continue
+            if timestamp_ms > order['execute_after_ms']:
+                self.ledger.append_event(
+                    event_id=_event_id(order['order_id'], 'expired'), session_id=self.session_id,
+                    event_type='order_expired', payload={**order, 'reason': 'missed_execution_bar'},
+                    strategy_version=self.strategy.__class__.__name__,
+                )
                 continue
             raw_price = float(open_prices[symbol])
             side = order["side"]
@@ -380,6 +392,7 @@ class EventDrivenPaperEngine:
             "pending_orders": self.pending_orders,
             "last_rebalance_ms": self.last_rebalance_ms,
             "last_signal_ms": self.last_signal_ms,
+            "pnl_day": self.pnl_day,
         }
 
     def restore(self, snapshot: Dict[str, Any]) -> None:
@@ -389,3 +402,4 @@ class EventDrivenPaperEngine:
         self.pending_orders = list(snapshot.get("pending_orders") or [])
         self.last_rebalance_ms = snapshot.get("last_rebalance_ms")
         self.last_signal_ms = snapshot.get("last_signal_ms")
+        self.pnl_day = snapshot.get('pnl_day')

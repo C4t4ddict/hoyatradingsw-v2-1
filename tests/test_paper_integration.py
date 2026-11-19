@@ -11,7 +11,7 @@ from paper_engine import FOUR_HOURS_MS
 
 def _market_history(start_price):
     count = 1220
-    final_start = int(datetime.now(timezone.utc).timestamp() * 1000) - FOUR_HOURS_MS
+    final_start = int(datetime.now(timezone.utc).timestamp() * 1000) // FOUR_HOURS_MS * FOUR_HOURS_MS - FOUR_HOURS_MS
     first = final_start - (count - 1) * FOUR_HOURS_MS
     return [
         [first + index * FOUR_HOURS_MS, start_price + index * 0.1, start_price + index * 0.1 + 1, start_price + index * 0.1 - 1, start_price + index * 0.1, 1000.0]
@@ -76,7 +76,8 @@ class PaperLiveIntegrationTests(unittest.TestCase):
             "SOL/USDT": _market_history(20.0),
         }
         with tempfile.TemporaryDirectory() as directory, \
-                patch("paper_live.fetch_ohlcv", side_effect=lambda exchange, symbol, *args, **kwargs: histories[symbol]), \
+                patch("paper_live._paper_candles", side_effect=lambda exchange, symbol, *args, **kwargs: histories[symbol]), \
+                patch.dict('os.environ', {'RUNTIME_DB_PATH': str(Path(directory) / 'runtime.sqlite3')}), \
                 patch("paper_live.LEDGER_PATH", str(Path(directory) / "ledger.sqlite3")):
             state_path = str(Path(directory) / "state.json")
             state = {
@@ -104,7 +105,7 @@ class PaperLiveIntegrationTests(unittest.TestCase):
     @patch("paper_live._release_lock")
     @patch("paper_live._persist_session_snapshot")
     @patch("paper_live.get_exchange", return_value=object())
-    @patch("paper_live.fetch_ohlcv", side_effect=RuntimeError("network unavailable"))
+    @patch("paper_live._paper_candles", side_effect=RuntimeError("network unavailable"))
     def test_market_data_failure_holds_without_creating_orders(self, _fetch, _exchange, _snapshot, _release):
         with tempfile.TemporaryDirectory() as directory, \
                 patch("paper_live.LEDGER_PATH", str(Path(directory) / "ledger.sqlite3")):
