@@ -51,6 +51,7 @@ def get_paper_payload():
         'paper_note': (state.get('result') or {}).get('note'),
         'strategy_decision': state.get('strategy_decision'),
         'risk_status': state.get('risk_status'),
+        'daily_loss_limit_pct': float((state.get('config') or {}).get('daily_loss_limit_pct', 0.02)),
         'order_events': state.get('order_events') or [],
         'pending_orders': ((state.get('event_engine') or {}).get('pending_orders') or []),
         'market_regime': state.get('market_regime'),
