@@ -44,7 +44,7 @@ function NewsPanel({ rows, shown, topic, setTopic, source, setSource, selected, 
   const sources = [...new Set(rows.map(item => item.source).filter(Boolean))].sort()
   return <aside className="terminal-panel terminal-context intel-panel" aria-label="시장 뉴스">
     <div className="terminal-panel-heading"><h2>시장 뉴스</h2><span className="terminal-tag">{shown.length} / {rows.length}건</span></div>
-    <p className="intel-item-meta">시장 공통 이벤트 · 상위 뉴스 기준</p>
+    <p className="intel-item-meta">시장 공통 이벤트 · 차트는 발행 시각 기준</p>
     <div className="intel-filters">
       <label>주제<select value={topic} onChange={event => setTopic(event.target.value)}>
         <option value="">전체 주제</option>
@@ -183,7 +183,7 @@ export default function IntelWorkspace({ data }) {
       <CandleChart mode="intel" markers={markers} focusEvent={selected ? picked : null} />
       <NewsPanel rows={rows} shown={shown} topic={topic} source={source} selected={selected} recovered={Boolean(brief)}
         setTopic={value => { setTopic(value); setPicked(null) }} setSource={value => { setSource(value); setPicked(null) }}
-        selectItem={item => setPicked({ item, time: eventTime(item.event_time) })} />
+        selectItem={item => setPicked({ item, time: eventTime(item.published) })} />
     </div>
     <Tabs tabs={[
       ['신호 품질', <SignalPanel key="quality" signal={signal} brief={brief} quality={quality} />],

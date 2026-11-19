@@ -7,7 +7,7 @@ export function filterNews(items, topic, source) {
 
 export function newsMarkers(items) {
   return items.flatMap(item => {
-    const time = eventTime(item.event_time)
+    const time = eventTime(item.published)
     return Number.isFinite(time) ? [{ time, kind: 'news', label: item.title_ko || item.title }] : []
   })
 }

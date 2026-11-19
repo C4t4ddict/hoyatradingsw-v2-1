@@ -172,7 +172,9 @@ export default function CandleChart({ markers = EMPTY, mode = 'market', refresh 
           <span key={label}>{label} <b>{number(active[i + 1])}</b></span>)}
       </div>
       {focusEvent && focused == null && <p className="terminal-summary" role="status">
-        선택한 뉴스의 관측 시각에 표시할 확정 봉이 없습니다. 기간을 변경하면 이전 봉을 확인할 수 있습니다.
+        {Number.isFinite(focusEvent.time)
+          ? '이 기간에는 발행 시각에 해당하는 확정 봉이 없습니다.'
+          : '선택한 뉴스의 발행 시각을 확인할 수 없습니다.'}
       </p>}
       <Plot plot={plot} grouped={grouped} selected={selected} onPick={setSelected} />
       <div className="terminal-chart-footer">
