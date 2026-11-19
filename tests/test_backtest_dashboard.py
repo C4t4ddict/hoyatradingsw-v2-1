@@ -3,7 +3,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from backend.app.services.backtest_service import _completed_candles, run_backtest_analysis
+from backend.app.services.backtest_service import _completed_candles, _report_curve, run_backtest_analysis
 
 
 def synthetic_candles(count=480):
@@ -48,8 +48,22 @@ class BacktestDashboardServiceTests(unittest.TestCase):
         self.assertIn("max_drawdown_pct", result["metrics"])
         self.assertIn("benchmark_return_pct", result["metrics"])
         self.assertIn("sharpe", result["metrics"])
+        chart = result["equity_curve"]
+        self.assertAlmostEqual(chart[-1]["benchmark_equity"] / 10 - 100, result["metrics"]["benchmark_return_pct"])
+        self.assertAlmostEqual(max(point["drawdown_pct"] for point in chart), result["metrics"]["max_drawdown_pct"])
         get_exchange.assert_called_once_with(read_only=True, market_type="spot")
         fetch_ohlcv.assert_called_once()
+
+    def test_unsampled_peak_and_largest_drawdown_are_used_in_report(self):
+        candles = [[i, 100, 100, 100, 100, 2] for i in range(480)]
+        curve = [{"ts": row[0], "equity": 1000} for row in candles]
+        curve[1]["equity"] = 1250
+        curve[3]["equity"] = 875
+        report = _report_curve(curve, candles, 1000, 101, 0.99)
+        self.assertLessEqual(len(report), 360)
+        self.assertEqual([report[0]["ts"], report[-1]["ts"]], [0, 479])
+        self.assertAlmostEqual(max(point["drawdown_pct"] for point in report), 30)
+        self.assertAlmostEqual(report[-1]["benchmark_equity"], 99000 / 101)
 
     @patch("backend.app.services.backtest_service.fetch_funding_rates", return_value=[{"timestamp": 1_735_700_000_000, "fundingRate": 0.0001}])
     @patch("backend.app.services.backtest_service.fetch_ohlcv", return_value=synthetic_candles(120))
