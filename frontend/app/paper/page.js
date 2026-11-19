@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { koBias, koFallback, koPosition, koStatus, koStrategy } from '../../lib/ko'
 
-const BASE = 'http://127.0.0.1:8010'
+import { API_BASE as BASE } from '../../lib/api'
 
 function fmt(n, suffix='') { return n===null||n===undefined||n==='' ? '-' : `${Number(n).toFixed(2)}${suffix}` }
 
