@@ -42,6 +42,30 @@ def _sample_curve(curve: List[Dict[str, Any]], limit: int = 360) -> List[Dict[st
     return sampled
 
 
+def _report_curve(curve, candles, initial, benchmark_entry, exit_factor):
+    if not curve:
+        return []
+    closes = {row[0]: row[4] for row in candles}
+    peak = initial
+    points = []
+    for point in curve:
+        equity = point["equity"]
+        peak = max(peak, equity)
+        points.append({
+            **point,
+            "benchmark_equity": initial * closes[point["ts"]] * exit_factor / benchmark_entry,
+            "drawdown_pct": (1 - equity / peak) * 100,
+        })
+    if len(points) <= 360:
+        return points
+    sampled = _sample_curve(points, limit=359)
+    worst = max(points, key=lambda point: point["drawdown_pct"])
+    if worst not in sampled:
+        sampled.append(worst)
+        sampled.sort(key=lambda point: point["ts"])
+    return sampled
+
+
 def _annualized_sharpe(curve: List[Dict[str, Any]], timeframe: str) -> float:
     values = [float(row["equity"]) for row in curve if float(row.get("equity") or 0) > 0]
     returns = [(values[i] / values[i - 1]) - 1.0 for i in range(1, len(values)) if values[i - 1] > 0]
@@ -111,7 +135,8 @@ def run_backtest_analysis(
     first_open = float(candles[0][1])
     last_close = float(candles[-1][4])
     benchmark_entry = first_open * (1.0 + slippage_pct) * (1.0 + fee_pct)
-    benchmark_exit = last_close * (1.0 - slippage_pct) * (1.0 - fee_pct)
+    exit_factor = (1.0 - slippage_pct) * (1.0 - fee_pct)
+    benchmark_exit = last_close * exit_factor
     benchmark_return = ((benchmark_exit / benchmark_entry) - 1.0) * 100.0 if benchmark_entry > 0 else 0.0
     curve = result.get("equity_curve") or []
     total_fees = sum(float(trade.get("fees") or 0) for trade in result.get("trades") or [])
@@ -144,7 +169,7 @@ def run_backtest_analysis(
             "total_fees": total_fees,
             "total_funding": total_funding,
         },
-        "equity_curve": _sample_curve(curve),
+        "equity_curve": _report_curve(curve, candles, initial_usdt, benchmark_entry, exit_factor),
         "trades": (result.get("trades") or [])[-100:],
         "source": {
             "provider": "Binance 공개 OHLCV",
