@@ -75,6 +75,7 @@ Next.js 웹(3001) → FastAPI(8010) → Python 전략/페이퍼 엔진 → SQLit
 - 페이퍼 누적 체결 수는 원장 전체에서 읽는다. 일간 손실 카운터는 UTC 날짜 변경 시 초기화하고 snapshot에 날짜를 보존한다. 예정 봉을 놓친 주문은 `order_expired`로 기록한다.
 - 테스트 선택기는 import 경로의 전이 의존성을 탐색한다. 변경된 테스트 자체는 항상 실행하고, requirements 변경은 전체 테스트 대상으로 판단한다. PR CI도 같은 선택기를 사용한다.
 - Windows 실동작 점검에서 기존 `os.kill(pid, 0)` 생존 검사가 worker를 종료할 수 있음을 확인했다. Windows에서는 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `GetExitCodeProcess` → `CloseHandle`의 읽기 전용 검사로 교체한다. POSIX의 signal 0 검사는 유지한다. 이 보완은 R3의 지속 실행 요건이며 가짜 Windows API와 실제 자식 프로세스로 검사 후 생존을 검증한다.
+- Windows launcher 종료는 자신이 생성한 프로세스의 자식 트리까지 정리한다. venv 및 Next.js의 자식 프로세스가 포트를 점유한 채 남는 것을 방지한다.
 
 ## 9. 변경/병합 순서
 

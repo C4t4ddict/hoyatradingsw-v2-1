@@ -31,6 +31,6 @@ try {
     }
 } finally {
     foreach ($child in $children) {
-        if (-not $child.HasExited) { Stop-Process -Id $child.Id -ErrorAction SilentlyContinue }
+        if (-not $child.HasExited) { & taskkill.exe /PID $child.Id /T /F | Out-Null }
     }
 }
