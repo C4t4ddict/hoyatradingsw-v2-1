@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchJson } from '../../lib/api'
-import { markersByBar, number, percent, RANGES, SYMBOLS, timeLabel, windowBars } from '../../lib/trading-chart.mjs'
+import { eventBar, markersByBar, number, percent, RANGES, SYMBOLS, timeLabel, windowBars } from '../../lib/trading-chart.mjs'
 
 const MARGIN = { left: 12, right: 76, top: 14, bottom: 28 }
 const COLORS = { up: '#35c995', down: '#ef777b', news: '#f0bd65', signal: '#88adff' }
@@ -119,11 +119,11 @@ function Plot({ plot, grouped, selected, onPick }) {
   }
 }
 
-export default function CandleChart({ markers = EMPTY, mode = 'market', refresh = 0 }) {
+export default function CandleChart({ markers = EMPTY, mode = 'market', refresh = 0, focusEvent = null }) {
   const [symbol, setSymbol] = useState(SYMBOLS[0])
   const [range, setRange] = useState(RANGES[0].bars)
   const [response, setResponse] = useState(null)
-  const [selected, setSelected] = useState(null)
+  const [manual, setManual] = useState(null)
   useEffect(() => {
     let current = true
     fetchJson(`/api/runtime/candles?symbol=${encodeURIComponent(symbol)}`)
@@ -137,24 +137,27 @@ export default function CandleChart({ markers = EMPTY, mode = 'market', refresh 
     ...windowBars(result?.data?.rows || EMPTY, interval, range), interval,
   }), [result, interval, range])
   const grouped = useMemo(() => markersByBar(plot.rows, interval, markers, symbol), [plot, interval, markers, symbol])
+  const focused = focusEvent ? eventBar(plot.rows, interval, focusEvent.time) : null
+  const selected = manual?.focusEvent === focusEvent ? manual.time : focused
+  const setSelected = time => setManual({ focusEvent, time })
   const index = plot.rows.findIndex(([time]) => time === selected)
   const active = selected == null ? plot.rows.at(-1) : plot.rows[index]
   const last = plot.rows.at(-1)
   const previous = plot.rows.at(-2)
   const change = last && previous && last[0] - previous[0] === interval ? (last[4] / previous[4] - 1) * 100 : null
-  const legend = mode === 'paper' ? ['buy', 'sell'] : ['news', 'signal']
+  const legend = mode === 'paper' ? ['buy', 'sell'] : mode === 'intel' ? ['news'] : ['news', 'signal']
   const activeMarkers = grouped.get(active?.[0]) || []
 
   return <section className="terminal-panel terminal-chart" aria-label="가격 차트">
     <div className="terminal-chart-toolbar">
       <div className="terminal-switch" role="group" aria-label="차트 종목">{SYMBOLS.map(value =>
-        <button type="button" key={value} aria-pressed={symbol === value} onClick={() => { setSymbol(value); setSelected(null) }}>
+        <button type="button" key={value} aria-pressed={symbol === value} onClick={() => { setSymbol(value); setManual(null) }}>
           {value.split('/')[0]}
         </button>)}</div>
       <span className="terminal-tag">4시간봉</span>
       <div className="terminal-switch terminal-ranges" role="group" aria-label="차트 기간">{RANGES.map(option =>
         <button type="button" key={option.bars} aria-pressed={range === option.bars}
-          onClick={() => { setRange(option.bars); setSelected(null) }}>{option.label}</button>)}</div>
+          onClick={() => { setRange(option.bars); setManual(null) }}>{option.label}</button>)}</div>
     </div>
     <div className="terminal-quote">
       <strong>{symbol}</strong>
@@ -168,6 +171,11 @@ export default function CandleChart({ markers = EMPTY, mode = 'market', refresh 
         {active && ['시가', '고가', '저가', '종가', '거래량'].map((label, i) =>
           <span key={label}>{label} <b>{number(active[i + 1])}</b></span>)}
       </div>
+      {focusEvent && focused == null && <p className="terminal-summary" role="status">
+        {Number.isFinite(focusEvent.time)
+          ? '이 기간에는 발행 시각에 해당하는 확정 봉이 없습니다.'
+          : '선택한 뉴스의 발행 시각을 확인할 수 없습니다.'}
+      </p>}
       <Plot plot={plot} grouped={grouped} selected={selected} onPick={setSelected} />
       <div className="terminal-chart-footer">
         <div className="terminal-legend">{legend.map(kind =>

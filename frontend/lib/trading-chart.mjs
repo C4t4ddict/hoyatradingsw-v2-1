@@ -21,6 +21,12 @@ export function markersByBar(rows, interval, markers, symbol) {
   return byBar
 }
 
+export function eventBar(rows, interval, time) {
+  if (!Number.isFinite(time) || !Number.isFinite(interval) || interval <= 0) return null
+  const start = Math.floor(time / interval) * interval
+  return rows.some(row => row[0] === start) ? start : null
+}
+
 export function eventTime(value) {
   return typeof value === 'number' ? value : value ? Date.parse(value) : NaN
 }

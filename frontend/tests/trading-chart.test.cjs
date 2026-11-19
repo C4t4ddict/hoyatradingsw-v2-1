@@ -11,3 +11,13 @@ test('candle windows preserve gaps and markers require a completed bar and match
   const markers = [signal, news, { time: 299, symbol: 'ETH/USDT' }, { time: 301 }, { time: 500 }]
   assert.deepEqual([...markersByBar(plot.rows, 100, markers, 'BTC/USDT')], [[200, [signal]], [400, [news]]])
 })
+
+test('news focus resolves only to a present completed candle and respects exact bar boundaries', async () => {
+  const { eventBar } = await import('../lib/trading-chart.mjs')
+  const rows = [[100], [200], [400]]
+  assert.equal(eventBar(rows, 100, 299), 200)
+  assert.equal(eventBar(rows, 100, 300), null)
+  assert.equal(eventBar(rows, 100, 500), null)
+  assert.equal(eventBar(rows, 100, NaN), null)
+  assert.equal(eventBar(rows, 100, 100), 100)
+})

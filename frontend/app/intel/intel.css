@@ -1,0 +1,24 @@
+.intel-panel .intel-item-meta { display: block; margin-top: 5px; color: var(--terminal-muted); font-size: 11px; line-height: 1.4; }
+.intel-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
+.intel-filters label { display: grid; gap: 4px; min-width: 0; color: var(--terminal-muted); font-size: 11px; }
+.intel-filters select { color-scheme: dark; min-width: 0; border: 1px solid var(--terminal-line); border-radius: 4px; padding: 6px; background: #111927; font-size: 12px; }
+.intel-feed { max-height: 252px; overflow: auto; scrollbar-color: #445773 var(--terminal-plot); border-block: 1px solid var(--terminal-line); }
+.intel-feed button { display: grid; gap: 4px; width: 100%; padding: 6px 7px 9px; text-align: left; border: 0; border-bottom: 1px solid var(--terminal-line); background: transparent; }
+.intel-feed button:last-child { border-bottom: 0; }
+.intel-feed button[aria-pressed=true] { background: #203448; box-shadow: inset 2px 0 #76d9bd; }
+.intel-feed button:hover { background: #1b2a3d; }
+.intel-feed strong, .intel-event-detail strong { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.intel-event-detail { display: grid; gap: 4px; padding-top: 7px; }
+.intel-event-detail p { overflow-wrap: anywhere; }
+.intel-scores { display: flex; flex-wrap: wrap; gap: 7px; font-size: 11px; }
+.intel-scores a { margin-left: auto; color: #a9c5ff; }
+.intel-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; padding: 12px; margin: 0; }
+.intel-facts dd { margin-top: 5px; }
+.intel-signal-overview { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 3fr); }
+.intel-signal-overview > div { padding: 12px; border-right: 1px solid var(--terminal-line); }
+.intel-blockers { margin: 8px 12px; padding: 9px 12px; border-left: 2px solid #ae8446; background: #292629; }
+.intel-blockers ul { margin: 5px 0 0; padding-left: 18px; color: var(--terminal-muted); }
+@media (max-width: 740px) {
+  .intel-signal-overview { grid-template-columns: minmax(0, 1fr); }
+  .intel-signal-overview > div { border-right: 0; border-bottom: 1px solid var(--terminal-line); }
+}
