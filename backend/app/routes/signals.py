@@ -1,11 +1,12 @@
 import os
 from typing import Optional
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 
 from signal_quality import SignalQualityStore, analyze_market_regime
 from ml_readiness import get_hybrid_ml_readiness
+from backend.app.routes.security import require_operator
 
 
 router = APIRouter()
@@ -28,10 +29,10 @@ class SignalOutcome(BaseModel):
 
 
 class MarketRegimeRequest(BaseModel):
-    closes: list[float]
-    volumes: Optional[list[float]] = None
+    closes: list[float] = Field(max_length=20_000)
+    volumes: Optional[list[float]] = Field(default=None, max_length=20_000)
     funding_rate: float = 0.0
-    alt_returns: Optional[list[float]] = None
+    alt_returns: Optional[list[float]] = Field(default=None, max_length=20_000)
     as_of_index: Optional[int] = None
 
 
@@ -54,7 +55,7 @@ def get_model_readiness():
     return get_hybrid_ml_readiness()
 
 
-@router.post('/api/signals/outcomes')
+@router.post('/api/signals/outcomes', dependencies=[Depends(require_operator)])
 def record_signal_outcome(body: SignalOutcome):
     store = _store()
     written = store.record(**body.model_dump())

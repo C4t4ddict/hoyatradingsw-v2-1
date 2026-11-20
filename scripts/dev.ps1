@@ -16,7 +16,7 @@ $children = @()
 try {
     $backend = Start-Process -FilePath $projectPython -ArgumentList '-m uvicorn backend.app.main:app --host 127.0.0.1 --port 8010' -WindowStyle Hidden -PassThru
     $children += $backend
-    $web = Start-Process -FilePath $node -WorkingDirectory (Join-Path $projectRoot 'frontend') -ArgumentList 'node_modules/next/dist/bin/next dev -p 3001' -WindowStyle Hidden -PassThru
+    $web = Start-Process -FilePath $node -WorkingDirectory (Join-Path $projectRoot 'frontend') -ArgumentList 'node_modules/next/dist/bin/next dev --hostname 127.0.0.1 -p 3001' -WindowStyle Hidden -PassThru
     $children += $web
     $collector = Start-Process -FilePath $projectPython -ArgumentList 'run_runtime.py' -WindowStyle Hidden -PassThru
     $children += $collector

@@ -26,8 +26,9 @@ const ACTION_LABELS = {
 const statusText = (value, yes, no) => value === true ? yes : value === false ? no : '미확인'
 const tone = value => value === true ? 'good' : value === false ? 'bad' : 'warn'
 
-async function readStatus(path, signal) {
-  const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal })
+async function readStatus(path, signal, settingsToken) {
+  const headers = settingsToken ? { 'X-Settings-Token': settingsToken } : undefined
+  const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal, headers })
   if (!response.ok) throw new Error('상태 조회 실패')
   return response.json()
 }
@@ -91,7 +92,7 @@ export default function OperationsPage() {
   const inflight = useRef(false)
 
   async function refresh(keys, signal) {
-    const results = await Promise.allSettled(keys.map(key => readStatus(SOURCES[key], signal)))
+    const results = await Promise.allSettled(keys.map(key => readStatus(SOURCES[key], signal, settingsToken)))
     if (signal?.aborted) return false
     const failed = keys.filter((_, index) => results[index].status === 'rejected')
     const next = Object.fromEntries(keys.map((key, index) => [key, results[index].status === 'fulfilled' ? results[index].value : null]))
@@ -103,7 +104,7 @@ export default function OperationsPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    refresh(Object.keys(SOURCES), controller.signal)
+    refresh(['security', 'live', 'runtime'], controller.signal)
     const timer = setInterval(() => {
       if (!inflight.current) refresh(['runtime'], controller.signal)
     }, 15000)
@@ -131,7 +132,7 @@ export default function OperationsPage() {
         if (!response.ok) throw new Error(operationError(response.status))
         payload = await response.json().catch(() => null)
       }
-      const updated = await refresh(Object.keys(SOURCES))
+      const updated = await refresh(Object.keys(SOURCES).filter(key => key !== 'ops' || settingsToken))
       const message = path ? onSuccess?.(payload) || '요청이 반영되었습니다.' : '최신 상태를 확인했습니다.'
       setFeedback(updated ? { message } : { message: path ? `${message} 일부 상태를 새로고침하지 못했습니다.` : '일부 상태를 새로고침하지 못했습니다.', warning: true })
     } catch (error) {

@@ -147,9 +147,9 @@ class LiveControlTests(unittest.TestCase):
         authorize.return_value = {
             "allowed": False, "reasons": ["live_not_double_confirmed"], "control": {"mode": "paper"},
         }
-        with patch("webhook_server.DRY_RUN", False), patch("webhook_server.WEBHOOK_TOKEN", ""):
-            leverage = futures_configure(FuturesConfigRequest(symbol="BTC/USDT:USDT", leverage=2, margin_mode="isolated"))
-            position = futures_position_mode(FuturesPositionModeRequest(hedged=False))
+        with patch("webhook_server.DRY_RUN", False), patch("webhook_server.WEBHOOK_TOKEN", "fixture-token"):
+            leverage = futures_configure(FuturesConfigRequest(symbol="BTC/USDT:USDT", leverage=2, margin_mode="isolated"), "fixture-token")
+            position = futures_position_mode(FuturesPositionModeRequest(hedged=False), "fixture-token")
 
         self.assertTrue(leverage["ignored"])
         self.assertTrue(position["ignored"])

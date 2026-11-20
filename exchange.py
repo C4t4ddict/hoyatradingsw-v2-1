@@ -16,9 +16,6 @@ def _normalize_market_type(market_type: str) -> str:
 
 def get_exchange(read_only: bool = False, market_type: str = ""):
     ex_name = os.getenv("EXCHANGE", "binance")
-    key = resolve_secret("API_KEY")
-    secret = resolve_secret("API_SECRET")
-
     ex_class = getattr(ccxt, ex_name)
     default_type = _normalize_market_type(market_type)
 
@@ -32,8 +29,8 @@ def get_exchange(read_only: bool = False, market_type: str = ""):
     }
 
     if not read_only:
-        config["apiKey"] = key
-        config["secret"] = secret
+        config["apiKey"] = resolve_secret("API_KEY")
+        config["secret"] = resolve_secret("API_SECRET")
 
     ex = ex_class(config)
 

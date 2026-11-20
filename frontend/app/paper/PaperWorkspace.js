@@ -93,6 +93,7 @@ export default function PaperWorkspace({ initialPaper, initialSignals }) {
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState(null)
   const [resetOpen, setResetOpen] = useState(false)
+  const [settingsToken, setSettingsToken] = useState('')
   const [refresh, setRefresh] = useState(0)
   const locked = useRef(false)
 
@@ -108,7 +109,7 @@ export default function PaperWorkspace({ initialPaper, initialSignals }) {
     && volatility !== '' && Number(volatility) >= 1 && Number(volatility) <= 25
 
   async function perform(action) {
-    if (locked.current) return
+    if (locked.current || (action !== 'refresh' && !settingsToken)) return
     locked.current = true
     setBusy(true)
     setFeedback(null)
@@ -120,7 +121,7 @@ export default function PaperWorkspace({ initialPaper, initialSignals }) {
           initial_usdt: Number(cash), target_volatility: Number(volatility) / 100,
           strategy: 'vol_target_momentum', mode: 'vol_target_momentum', timeframe: '4h', position_mode: 'long_cash',
         } : null
-        await postJson(`/api/paper/${action}`, body)
+        await postJson(`/api/paper/${action}`, body, settingsToken)
         applied = true
         setResetOpen(false)
       }
@@ -165,6 +166,8 @@ export default function PaperWorkspace({ initialPaper, initialSignals }) {
         <div className="terminal-panel-heading"><h2>운용 설정</h2><span className="terminal-tag">현물 · 1배</span></div>
         <p className="paper-muted">{koStrategy(paper?.executed_strategy || paper?.config?.strategy)} · 매수·현금</p>
         <div className="paper-inputs">
+          <label>설정 토큰<input type="password" autoComplete="off" value={settingsToken}
+            disabled={busy} onChange={event => setSettingsToken(event.target.value)} /></label>
           <label>시작 잔액 (USDT)<input type="number" min="100" max="1000000" step="any"
             value={cash} disabled={busy} onChange={event => setCash(event.target.value)} /></label>
           <label>목표 변동성 (%)
@@ -173,9 +176,9 @@ export default function PaperWorkspace({ initialPaper, initialSignals }) {
           </label>
         </div>
         <div className="paper-actions">
-          <button type="button" className="paper-primary" disabled={busy || !valid || !paper || running} onClick={() => perform('start')}>시작</button>
-          <button type="button" disabled={busy || !valid || !paper} onClick={() => perform('config')}>설정 반영</button>
-          <button type="button" disabled={busy || !running} onClick={() => perform('pause')}>일시정지</button>
+          <button type="button" className="paper-primary" disabled={busy || !settingsToken || !valid || !paper || running} onClick={() => perform('start')}>시작</button>
+          <button type="button" disabled={busy || !settingsToken || !valid || !paper} onClick={() => perform('config')}>설정 반영</button>
+          <button type="button" disabled={busy || !settingsToken || !running} onClick={() => perform('pause')}>일시정지</button>
           <button type="button" disabled={busy} onClick={() => perform('refresh')}>{busy ? '처리 중…' : '새로고침'}</button>
         </div>
         <p className="paper-muted">설정 반영 시 새 세션이 시작됩니다.</p>
@@ -191,9 +194,9 @@ export default function PaperWorkspace({ initialPaper, initialSignals }) {
           <p role="alert">현재 모의투자 세션을 초기화할까요?</p>
           <div className="paper-actions">
             <button type="button" disabled={busy} onClick={() => setResetOpen(false)}>취소</button>
-            <button type="button" className="bad" disabled={busy} onClick={() => perform('reset')}>초기화 확인</button>
+            <button type="button" className="bad" disabled={busy || !settingsToken} onClick={() => perform('reset')}>초기화 확인</button>
           </div>
-        </div> : <button type="button" className="paper-reset-link" disabled={busy || !paper} onClick={() => setResetOpen(true)}>세션 초기화…</button>}
+        </div> : <button type="button" className="paper-reset-link" disabled={busy || !settingsToken || !paper} onClick={() => setResetOpen(true)}>세션 초기화…</button>}
       </aside>
     </div>
     <Tabs tabs={[

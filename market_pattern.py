@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-import joblib
+from model_artifacts import load_local_model
 import pandas as pd
 
 from ml_market_data import completed_candles
@@ -118,7 +118,7 @@ def predict_market_pattern(frame: pd.DataFrame | None = None) -> dict:
         if latest_validation.get("validation_passed") is not True:
             predictions[target] = {"ok": False, "reason": "latest validation not passed"}
             continue
-        bundle = joblib.load(path)
+        bundle = load_local_model(path)
         metadata = bundle.get("metadata") or {}
         if metadata.get("validation_passed") is not True:
             predictions[target] = {"ok": False, "reason": "model validation not passed"}

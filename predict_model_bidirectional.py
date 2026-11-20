@@ -1,8 +1,8 @@
 import threading
 from pathlib import Path
 
-import joblib
 import pandas as pd
+from model_artifacts import load_local_model
 
 
 MODEL_DIR = Path("data/models_bidirectional")
@@ -62,7 +62,7 @@ def _load_model_bundle(model_path: Path) -> dict:
         cached = _MODEL_CACHE.get(cache_key)
         if cached and cached[0] == modified_ns:
             return cached[1]
-        bundle = joblib.load(model_path)
+        bundle = load_local_model(model_path)
         _MODEL_CACHE[cache_key] = (modified_ns, bundle)
         return bundle
 

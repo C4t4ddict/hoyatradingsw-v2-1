@@ -5,13 +5,15 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 from typing import List, Dict
+
+from public_http import open_public_request, read_public_body
 
 def _fetch_rss(url: str, timeout: int = 2) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="ignore")
+    with open_public_request(req, timeout=timeout) as resp:
+        return read_public_body(resp).decode("utf-8", errors="ignore")
 
 
 def _parse_items(xml_text: str) -> List[Dict[str, str]]:
@@ -126,8 +128,8 @@ def _translate_to_korean(text: str) -> str:
         q = urllib.parse.quote(text)
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q={q}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        with open_public_request(req, timeout=4) as resp:
+            data = json.loads(read_public_body(resp).decode("utf-8", errors="ignore"))
         translated = "".join(part[0] for part in data[0] if part and part[0])
     except Exception:
         translated = ""
@@ -137,8 +139,8 @@ def _translate_to_korean(text: str) -> str:
             q = urllib.parse.quote(text)
             url = f"https://api.mymemory.translated.net/get?q={q}&langpair=en%7Cko"
             req = urllib.request.Request(url, headers={"User-Agent": "HoyaTradingSW/2.1"})
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            with open_public_request(req, timeout=4) as resp:
+                data = json.loads(read_public_body(resp).decode("utf-8", errors="ignore"))
             translated = html.unescape(str((data.get("responseData") or {}).get("translatedText") or ""))
         except Exception:
             translated = ""

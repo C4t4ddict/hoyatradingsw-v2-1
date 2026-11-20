@@ -1,6 +1,6 @@
 from pathlib import Path
-import joblib
 import pandas as pd
+from model_artifacts import load_local_model
 
 MODEL_DIR = Path("data/models")
 MODEL_DIR_XGB_SHORT = Path("data/models_xgb_short")
@@ -28,7 +28,7 @@ def _load_bundle(target_col: str):
     for base in search_dirs:
         model_path = base / f"{target_col}.joblib"
         if model_path.exists():
-            bundle = joblib.load(model_path)
+            bundle = load_local_model(model_path)
             bundle["_model_path"] = str(model_path)
             bundle["_model_family"] = "xgboost-short" if base == MODEL_DIR_XGB_SHORT else "sklearn-stable"
             return bundle

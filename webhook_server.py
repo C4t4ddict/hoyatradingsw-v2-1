@@ -1,5 +1,6 @@
 import os
 import json
+import secrets
 import threading
 import time
 from datetime import datetime, timezone
@@ -37,7 +38,7 @@ from security import mask_text, resolve_secret
 
 load_dotenv()
 
-app = FastAPI(title="Pine Webhook Trader")
+app = FastAPI(title="Pine Webhook Trader", docs_url=None, redoc_url=None, openapi_url=None)
 
 with open("config.example.yaml", "r", encoding="utf-8") as f:
     CFG = yaml.safe_load(f)
@@ -74,6 +75,13 @@ ML_WEIGHT_4H = float(os.getenv("ML_WEIGHT_4H", "0.5"))
 ML_WEIGHT_24H = float(os.getenv("ML_WEIGHT_24H", "0.3"))
 ML_MIN_COMPOSITE_SCORE = float(os.getenv("ML_MIN_COMPOSITE_SCORE", "0.54"))
 ML_MIN_SHORT_CONFIRM = float(os.getenv("ML_MIN_SHORT_CONFIRM", "0.50"))
+
+
+def _authorize_webhook(token: Optional[str]) -> None:
+    if not WEBHOOK_TOKEN or WEBHOOK_TOKEN == 'CHANGE_ME':
+        raise HTTPException(503, "WEBHOOK_TOKEN is not configured")
+    if not isinstance(token, str) or not secrets.compare_digest(token.encode("utf-8"), WEBHOOK_TOKEN.encode("utf-8")):
+        raise HTTPException(401, "invalid webhook token")
 
 
 def _authorize_live_order(position_usdt: float, effective_dry_run: bool):
@@ -407,8 +415,7 @@ def health():
 
 @app.get("/account/status")
 def account_status(market_type: str = "spot", x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     mt = _market_kind(market_type)
     ex = _get_exchange(mt, read_only=False)
@@ -420,8 +427,7 @@ def account_status(market_type: str = "spot", x_webhook_token: Optional[str] = H
 
 @app.get("/strategy/params")
 def strategy_params(symbol: str, timeframe: str, strategy: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     latest = get_strategy_params(symbol, timeframe, strategy)
     versions = list_strategy_versions(symbol, timeframe, strategy)
@@ -438,8 +444,7 @@ def strategy_params(symbol: str, timeframe: str, strategy: str, x_webhook_token:
 
 @app.post("/strategy/activate-version")
 def strategy_activate_version(req: StrategyVersionActivateRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     ok = set_latest_from_version(req.symbol, req.timeframe, req.strategy, req.version_index)
     if not ok:
@@ -450,8 +455,7 @@ def strategy_activate_version(req: StrategyVersionActivateRequest, x_webhook_tok
 
 @app.get("/strategy/versions/compare")
 def strategy_versions_compare(symbol: str, timeframe: str, strategy: str, limit: int = 10, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     versions = list_strategy_versions(symbol, timeframe, strategy)
     rows = []
@@ -473,8 +477,7 @@ def strategy_versions_compare(symbol: str, timeframe: str, strategy: str, limit:
 
 @app.post("/strategy/tag")
 def strategy_tag(req: StrategyTagRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     ok = set_strategy_tag(req.symbol, req.timeframe, req.strategy, req.tag, req.version_index)
     if not ok:
@@ -484,16 +487,14 @@ def strategy_tag(req: StrategyTagRequest, x_webhook_token: Optional[str] = Heade
 
 @app.get("/strategy/tag")
 def strategy_tag_get(symbol: str, timeframe: str, strategy: str, tag: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
     data = get_strategy_tag(symbol, timeframe, strategy, tag)
     return {"ok": True, "symbol": symbol, "timeframe": timeframe, "strategy": strategy, "tag": tag, "data": data}
 
 
 @app.post("/strategy/promote")
 def strategy_promote(req: StrategyPromoteRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     src = get_strategy_tag(req.symbol, req.timeframe, req.strategy, req.from_tag)
     idx = src.get("version_index") if isinstance(src, dict) else None
@@ -509,8 +510,7 @@ def strategy_promote(req: StrategyPromoteRequest, x_webhook_token: Optional[str]
 
 @app.post("/strategy/lock")
 def strategy_lock(req: StrategyLockRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     ok = set_strategy_lock(req.symbol, req.timeframe, req.strategy, req.locked, req.reason)
     if not ok:
@@ -520,24 +520,21 @@ def strategy_lock(req: StrategyLockRequest, x_webhook_token: Optional[str] = Hea
 
 @app.get("/strategy/lock")
 def strategy_lock_get(symbol: str, timeframe: str, strategy: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
     data = get_strategy_lock(symbol, timeframe, strategy)
     return {"ok": True, "symbol": symbol, "timeframe": timeframe, "strategy": strategy, "lock": data}
 
 
 @app.get("/portfolio/weights")
 def portfolio_weights(symbol: str, timeframe: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
     data = get_portfolio_weights(symbol, timeframe)
     return {"ok": True, "symbol": symbol, "timeframe": timeframe, "weights": data}
 
 
 @app.post("/portfolio/weights")
 def portfolio_weights_save(req: PortfolioWeightRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     total = req.ema + req.rsi + req.breakout
     if total <= 0:
@@ -549,8 +546,7 @@ def portfolio_weights_save(req: PortfolioWeightRequest, x_webhook_token: Optiona
 
 @app.post("/futures/configure")
 def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     if DRY_RUN:
         return {
@@ -587,8 +583,7 @@ def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] 
 
 @app.post("/futures/position-mode")
 def futures_position_mode(req: FuturesPositionModeRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     if DRY_RUN:
         return {"ok": True, "dry_run": True, "position_mode": "hedge" if req.hedged else "one-way"}
@@ -613,8 +608,7 @@ def futures_position_mode(req: FuturesPositionModeRequest, x_webhook_token: Opti
 
 @app.post("/trade/result")
 def trade_result(result: TradeResult, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     mt = _market_kind(result.market_type)
     state = apply_trade_result(result.realized_pnl, _guard_cfg(mt), path=_guard_state_path(mt))
@@ -638,8 +632,7 @@ def trade_result(result: TradeResult, x_webhook_token: Optional[str] = Header(de
 
 @app.post("/report/daily")
 def report_daily(x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     events = read_events()
     s = summarize(events)
@@ -661,8 +654,7 @@ def report_daily(x_webhook_token: Optional[str] = Header(default=None)):
 
 @app.post("/webhook")
 def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     mt = _market_kind(signal.market_type)
 

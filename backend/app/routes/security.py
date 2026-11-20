@@ -1,7 +1,7 @@
 import secrets
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from live_controls import get_live_control_store
@@ -18,10 +18,19 @@ SecretName = Literal[
 
 def _authorize_settings(token: Optional[str]) -> None:
     expected = resolve_secret("SETTINGS_TOKEN")
-    if not expected:
+    if not expected or expected == 'CHANGE_ME_SETTINGS_TOKEN':
         raise HTTPException(status_code=503, detail="SETTINGS_TOKEN is not configured")
-    if not token or not secrets.compare_digest(token, expected):
+    if not isinstance(token, str) or not secrets.compare_digest(token.encode('utf-8'), expected.encode('utf-8')):
         raise HTTPException(status_code=401, detail="invalid settings token")
+
+
+def require_operator(x_settings_token: Optional[str] = Header(default=None)) -> None:
+    _authorize_settings(x_settings_token)
+
+
+def require_local_operator(request: Request, x_settings_token: Optional[str] = Header(default=None)) -> None:
+    if request.scope.get('hoya_desktop_authenticated') is not True:
+        _authorize_settings(x_settings_token)
 
 
 class SecretWriteRequest(BaseModel):
@@ -70,9 +79,13 @@ def api_security_delete_secret(name: SecretName, x_settings_token: Optional[str]
 
 
 @router.get('/api/live/status')
-def api_live_status():
+def api_live_status(request: Request, x_settings_token: Optional[str] = Header(default=None)):
     store = get_live_control_store()
-    return {"control": store.status(), "history": store.history(limit=100)}
+    history = []
+    if x_settings_token or request.scope.get('hoya_desktop_authenticated') is True:
+        require_local_operator(request, x_settings_token)
+        history = store.history(limit=100)
+    return {"control": store.status(), "history": history}
 
 
 @router.post('/api/live/challenge')

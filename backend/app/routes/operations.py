@@ -1,20 +1,20 @@
 from typing import Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends, Header
 
 from backend.app.services.operations_service import get_daily_report, get_operations_payload, send_daily_report
-from backend.app.routes.security import _authorize_settings
+from backend.app.routes.security import _authorize_settings, require_local_operator, require_operator
 
 
 router = APIRouter()
 
 
-@router.get('/api/operations')
+@router.get('/api/operations', dependencies=[Depends(require_local_operator)])
 def api_operations():
     return get_operations_payload()
 
 
-@router.get('/api/operations/daily-report')
+@router.get('/api/operations/daily-report', dependencies=[Depends(require_operator)])
 def api_operations_daily_report():
     return get_daily_report()
 

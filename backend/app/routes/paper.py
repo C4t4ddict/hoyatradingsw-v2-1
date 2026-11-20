@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from backend.app.services.paper_service import create_ledger_backup, create_ledger_export, get_paper_payload, start_paper, pause_paper, reset_paper, restore_ledger_backup, update_paper_config, get_paper_audit, get_paper_strategy, get_paper_events
-from backend.app.routes.security import _authorize_settings
+from backend.app.routes.security import _authorize_settings, require_local_operator
 
 router = APIRouter()
 
@@ -27,20 +27,20 @@ class LedgerRestoreRequest(BaseModel):
 def api_paper():
     return get_paper_payload()
 
-@router.post('/api/paper/start')
+@router.post('/api/paper/start', dependencies=[Depends(require_local_operator)])
 def api_paper_start(body: PaperStartRequest = None):
     cfg = body.model_dump(exclude_none=True) if body else None
     return start_paper(cfg)
 
-@router.post('/api/paper/pause')
+@router.post('/api/paper/pause', dependencies=[Depends(require_local_operator)])
 def api_paper_pause():
     return pause_paper()
 
-@router.post('/api/paper/reset')
+@router.post('/api/paper/reset', dependencies=[Depends(require_local_operator)])
 def api_paper_reset():
     return reset_paper()
 
-@router.post('/api/paper/config')
+@router.post('/api/paper/config', dependencies=[Depends(require_local_operator)])
 def api_paper_config(body: PaperStartRequest = None):
     cfg = body.model_dump(exclude_none=True) if body else {}
     return update_paper_config(cfg)

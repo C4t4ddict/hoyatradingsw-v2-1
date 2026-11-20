@@ -9,11 +9,12 @@ from typing import Dict, List
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, wait
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 import feedparser
 from signal_quality import SignalQualityStore, deduplicate_events, weight_events_by_source
 from news_sources import publisher_matches, treasury_entries
+from public_http import open_public_request, read_public_body
 
 CACHE_PATH = Path(os.getenv("MARKET_INTEL_CACHE_PATH", "data/market_intel_cache.json"))
 CACHE_TTL_SEC = int(os.getenv("MARKET_INTEL_CACHE_TTL_SEC", "300"))
@@ -161,8 +162,8 @@ def _iter_sources() -> List[Source]:
 def _parse_source(src: Source, per_source: int, timeout_sec: float) -> List[Dict]:
     rows: List[Dict] = []
     request = Request(src.url, headers={"User-Agent": "HoyaTradingSW/2.1 market-intel"})
-    with urlopen(request, timeout=max(0.1, timeout_sec)) as response:
-        payload = response.read()
+    with open_public_request(request, timeout=max(0.1, timeout_sec)) as response:
+        payload = read_public_body(response)
     if src.transport == 'treasury_html':
         entries = treasury_entries(payload)
     else:

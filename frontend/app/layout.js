@@ -1,10 +1,12 @@
 import './globals.css'
+import { connection } from 'next/server'
 import NavClient from './NavClient'
 
 export const metadata = { title: 'HoyaTradingSW v2.1', description: '시장 인텔리전스 기반 자동투자 플랫폼' }
 
 
-export default function RootLayout({ children }) {
+export default async function RootLayout({ children }) {
+  await connection()
   return (
     <html lang="ko">
       <body>
