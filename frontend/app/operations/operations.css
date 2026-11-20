@@ -1,0 +1,17 @@
+.ops-panel-heading, .ops-subheading { padding: 10px 12px; border-bottom: 1px solid var(--terminal-line); background: var(--terminal-plot); }
+.ops-terminal .ops-muted { color: var(--terminal-muted); font-size: 11px; line-height: 1.45; margin: 8px 0 12px; }
+.ops-terminal .ops-button { background: #1d2a3c; border: 1px solid var(--terminal-line); border-radius: 4px; padding: 6px 9px; font-weight: 650; }
+.ops-terminal .ops-button:hover:not(:disabled) { border-color: #80a8c7; }
+.ops-terminal .ops-button:disabled { opacity: .48; cursor: not-allowed; }
+.ops-terminal .ops-danger { color: #ffd5d7; background: #472633; border-color: #67404b; }
+.ops-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ops-tasks { display: grid; gap: 9px; }
+.ops-tasks h2:not(:first-child) { margin-top: 5px; }
+.ops-control label, .ops-fields label { display: grid; gap: 5px; min-width: 0; color: var(--terminal-muted); font-size: 11px; }
+.ops-terminal :is(input, select) { color-scheme: dark; padding: 6px 7px; font-size: 12px; border-radius: 4px; background: #111927; }
+.ops-cap { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: end; margin-top: 10px; }
+.ops-control-actions { display: grid; grid-template-columns: 1fr; }
+.ops-details summary { padding: 11px 12px; cursor: pointer; }
+.ops-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; gap: 8px; margin-top: 12px; }
+.ops-terminal .ops-notice { padding: 9px 11px; border: 1px solid var(--terminal-line); border-radius: 5px; }
+@media (max-width: 740px) { .ops-fields { grid-template-columns: minmax(0, 1fr); } }
