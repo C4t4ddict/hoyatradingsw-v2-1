@@ -1,156 +1,255 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { API_BASE } from '../../lib/api'
 import { koAlertMessage, koCategory, koStatus } from '../../lib/ko'
+import { number, timeLabel } from '../../lib/trading-chart.mjs'
+import { canConfirmLive, operationError } from '../../lib/operations-control.mjs'
+import { DetailTable, MetricStrip, SignalResults, Tabs } from '../terminal/Terminal'
+import { CampaignHistory, JobHistory, MarketStatus } from './RuntimePanel'
+import '../terminal/terminal.css'
+import './operations.css'
 
-import { API_BASE as BASE } from '../../lib/api'
-import RuntimePanel from './RuntimePanel'
+const SOURCES = {
+  ops: '/api/operations', security: '/api/security/status', live: '/api/live/status', runtime: '/api/runtime',
+}
 const SECRET_NAMES = [
-  'API_KEY','API_SECRET','WEBHOOK_TOKEN','ALERT_TELEGRAM_BOT_TOKEN',
-  'ALERT_TELEGRAM_CHAT_ID','PAPER_ALERT_TELEGRAM_BOT_TOKEN','PAPER_ALERT_TELEGRAM_CHAT_ID',
+  'API_KEY', 'API_SECRET', 'WEBHOOK_TOKEN', 'ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID',
+  'PAPER_ALERT_TELEGRAM_BOT_TOKEN', 'PAPER_ALERT_TELEGRAM_CHAT_ID',
 ]
+const ACTION_LABELS = {
+  live_challenge_requested: '1차 실거래 확인', live_enabled: '실거래 활성화', live_disabled: '모의투자 전환',
+  live_expired: '실거래 만료', order_cap_changed: '건당 주문 상한 변경',
+  session_checkpoint: '세션 체크포인트', session_started: '세션 시작', order_filled: '주문 체결',
+}
+const statusText = (value, yes, no) => value === true ? yes : value === false ? no : '미확인'
+const tone = value => value === true ? 'good' : value === false ? 'bad' : 'warn'
 
-function fmtDate(value){
-  if(!value) return '-'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString().replace('T',' ').slice(0,19)
+async function readStatus(path, signal) {
+  const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', signal })
+  if (!response.ok) throw new Error('상태 조회 실패')
+  return response.json()
 }
 
-export default function OperationsPage(){
-  const [ops,setOps]=useState(null)
-  const [security,setSecurity]=useState(null)
-  const [live,setLive]=useState(null)
-  const [settingsToken,setSettingsToken]=useState('')
-  const [challenge,setChallenge]=useState('')
-  const [cap,setCap]=useState(100)
-  const [secretName,setSecretName]=useState('API_KEY')
-  const [secretValue,setSecretValue]=useState('')
-  const [message,setMessage]=useState('')
-  const [busy,setBusy]=useState(false)
+function Alerts({ ops }) {
+  return <DetailTable columns={['상태', '심각도', '분류', '마지막 감지 (KST)', '횟수', '메시지']}
+    empty={ops ? '기록된 운영 경보가 없습니다.' : '운영 경보 미확인'}
+    rows={(ops?.alerts ?? []).slice(0, 30).map(row => ({ id: row.alert_id, cells: [
+      koStatus(row.status), <span key="severity" className={row.severity === 'critical' ? 'bad' : row.severity === 'warning' ? 'warn' : 'muted'}>{koStatus(row.severity)}</span>,
+      koCategory(row.category), timeLabel(row.last_seen_at), number(row.occurrence_count, 0), koAlertMessage(row.message),
+    ] }))} />
+}
 
-  const load=async()=>{
-    const [opsResponse,securityResponse,liveResponse]=await Promise.all([
-      fetch(`${BASE}/api/operations`,{cache:'no-store'}),
-      fetch(`${BASE}/api/security/status`,{cache:'no-store'}),
-      fetch(`${BASE}/api/live/status`,{cache:'no-store'}),
-    ])
-    if(!opsResponse.ok||!securityResponse.ok||!liveResponse.ok) throw new Error('운영 API 조회 실패')
-    const [opsJson,securityJson,liveJson]=await Promise.all([opsResponse.json(),securityResponse.json(),liveResponse.json()])
-    setOps(opsJson); setSecurity(securityJson); setLive(liveJson)
-    setCap(liveJson?.control?.max_order_usdt||100)
+function Audit({ live, audit }) {
+  return <>
+    <h2 className="ops-subheading">설정 변경 이력</h2>
+    <DetailTable columns={['변경 시각 (KST)', '작업자', '변경 내용']} empty={live ? '설정 변경 기록이 없습니다.' : '설정 기록 미확인'}
+      rows={(live?.history ?? []).slice(0, 20).map(row => ({ id: row.sequence, cells: [
+        timeLabel(row.changed_at, true), row.actor, ACTION_LABELS[row.action] || row.action,
+      ] }))} />
+    <h2 className="ops-subheading">감사 이벤트</h2>
+    <DetailTable columns={['발생 시각 (KST)', '유형', '전략 버전']} empty={audit ? '감사 기록이 없습니다.' : '감사 기록 미확인'}
+      rows={(audit?.recent_events ?? []).slice(0, 20).map(row => ({ id: row.event_id, cells: [
+        timeLabel(row.occurred_at, true), ACTION_LABELS[row.event_type] || row.event_type, row.strategy_version || '—',
+      ] }))} />
+  </>
+}
+
+function Vault({ security, locked, store }) {
+  const form = useRef(null)
+  const ready = security?.vault?.encryption_configured
+  const saved = new Set((security?.vault?.secrets ?? []).map(row => row.name))
+  return <>
+    <form ref={form} className="terminal-context ops-vault-form" onSubmit={event => {
+      event.preventDefault()
+      const data = new FormData(event.currentTarget)
+      store({ name: data.get('name'), value: data.get('value') }, () => form.current?.reset())
+    }}>
+      <div className="terminal-panel-heading"><h2>암호화 보관함</h2><span className={`terminal-tag ${ready ? 'good' : 'warn'}`}>
+        {statusText(ready, '마스터 키 준비', '마스터 키 필요')}</span></div>
+      <div className="ops-fields">
+        <label>자격증명 종류<select name="name">{SECRET_NAMES.map(name => <option key={name}>{name}</option>)}</select></label>
+        <label>저장할 값<input name="value" type="password" required maxLength={4096} autoComplete="new-password" /></label>
+        <button type="submit" className="ops-button" disabled={locked || ready !== true}>암호화 저장</button>
+      </div>
+    </form>
+    <DetailTable columns={['자격증명', '보관함 상태']} rows={SECRET_NAMES.map(name => ({ id: name,
+      cells: [name, security ? saved.has(name) ? '저장됨' : '미저장' : '미확인'],
+    }))} />
+  </>
+}
+
+export default function OperationsPage() {
+  const [data, setData] = useState({})
+  const [unavailable, setUnavailable] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [settingsToken, setSettingsToken] = useState('')
+  const [cap, setCap] = useState('')
+  const [challenge, setChallenge] = useState(null)
+  const [feedback, setFeedback] = useState(null)
+  const inflight = useRef(false)
+
+  async function refresh(keys, signal) {
+    const results = await Promise.allSettled(keys.map(key => readStatus(SOURCES[key], signal)))
+    if (signal?.aborted) return false
+    const failed = keys.filter((_, index) => results[index].status === 'rejected')
+    const next = Object.fromEntries(keys.map((key, index) => [key, results[index].status === 'fulfilled' ? results[index].value : null]))
+    setData(current => ({ ...current, ...next }))
+    setUnavailable(current => [...current.filter(key => !keys.includes(key)), ...failed])
+    if (keys.includes('live')) setCap(next.live?.control?.max_order_usdt ?? '')
+    return failed.length === 0
   }
 
-  useEffect(()=>{ load().catch(error=>setMessage(error.message)) },[])
+  useEffect(() => {
+    const controller = new AbortController()
+    refresh(Object.keys(SOURCES), controller.signal)
+    const timer = setInterval(() => {
+      if (!inflight.current) refresh(['runtime'], controller.signal)
+    }, 15000)
+    return () => { clearInterval(timer); controller.abort() }
+  }, [])
 
-  const mutate=async(path,body=null,method='POST')=>{
-    setBusy(true); setMessage('')
-    try{
-      const response=await fetch(`${BASE}${path}`,{
-        method,
-        headers:{'Content-Type':'application/json','X-Settings-Token':settingsToken},
-        body:body===null?null:JSON.stringify(body),
-      })
-      const payload=await response.json().catch(()=>({}))
-      if(!response.ok) throw new Error(payload.detail||`요청 실패 (${response.status})`)
-      setMessage('요청이 반영되었습니다.')
-      await load()
-      return payload
-    }catch(error){ setMessage(error.message); return null }
-    finally{ setBusy(false) }
-  }
+  useEffect(() => {
+    if (!challenge?.expires) return
+    const timer = setTimeout(() => setChallenge(null), Math.max(0, Date.parse(challenge.expires) - Date.now()))
+    return () => clearTimeout(timer)
+  }, [challenge])
 
-  const requestChallenge=async()=>{
-    const result=await mutate('/api/live/challenge',{confirmation:'I UNDERSTAND LIVE ORDERS'})
-    if(result?.challenge_token){ setChallenge(result.challenge_token); setMessage('1차 확인 완료. 5분 안에 2차 확인을 진행하세요.') }
-  }
-  const confirmLive=async()=>{
-    const result=await mutate('/api/live/confirm',{challenge_token:challenge,confirmation:'ENABLE LIVE TRADING',duration_minutes:240})
-    if(result?.live_enabled) setChallenge('')
-  }
-  const storeSecret=async()=>{
-    const result=await mutate('/api/security/secrets',{name:secretName,value:secretValue})
-    if(result?.stored) setSecretValue('')
-  }
-  const simpleAction=async(path)=>{
-    setBusy(true); setMessage('')
-    try{
-      const response=await fetch(`${BASE}${path}`,{method:'POST',headers:{'X-Settings-Token':settingsToken}})
-      const payload=await response.json().catch(()=>({}))
-      if(!response.ok) throw new Error(payload.detail||'요청 실패')
-      setMessage(payload.path ? `생성: ${payload.path}` : '요청이 반영되었습니다.')
-      await load()
-    }catch(error){ setMessage(error.message) }
-    finally{ setBusy(false) }
+  async function perform(path, body, onSuccess) {
+    if (inflight.current || (path && !settingsToken)) return
+    inflight.current = true
+    setBusy(true)
+    setFeedback(null)
+    try {
+      let payload = null
+      if (path) {
+        const response = await fetch(`${API_BASE}${path}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Settings-Token': settingsToken },
+          body: body == null ? undefined : JSON.stringify(body),
+        })
+        if (!response.ok) throw new Error(operationError(response.status))
+        payload = await response.json().catch(() => null)
+      }
+      const updated = await refresh(Object.keys(SOURCES))
+      const message = path ? onSuccess?.(payload) || '요청이 반영되었습니다.' : '최신 상태를 확인했습니다.'
+      setFeedback(updated ? { message } : { message: path ? `${message} 일부 상태를 새로고침하지 못했습니다.` : '일부 상태를 새로고침하지 못했습니다.', warning: true })
+    } catch (error) {
+      setFeedback({ message: error instanceof TypeError ? operationError() : error.message, warning: true })
+    } finally {
+      inflight.current = false
+      setBusy(false)
+    }
   }
 
-  const control=live?.control||security?.live_control||{}
-  const audit=ops?.audit||{}
-  const worker=audit?.worker||{}
-  const integrity=audit?.ledger_integrity||{}
-  const alerts=ops?.alerts||[]
-  const history=live?.history||[]
-  const events=audit?.recent_events||[]
-  const vaultSecrets=security?.vault?.secrets||[]
+  const { ops, security, live, runtime } = data
+  const control = live?.control ?? security?.live_control
+  const audit = ops?.audit
+  const worker = audit?.worker
+  const integrity = audit?.ledger_integrity
+  const collector = runtime?.worker
+  const state = !collector ? '미확인' : !collector.enabled ? '일시정지' : collector.alive ? '실행 중' : '미실행'
+  const mode = statusText(control?.live_enabled, '실거래 활성', '모의투자 보호')
+  const runtimeErrors = runtime?.jobs?.filter(job => job.error).length
+  const locked = busy || !settingsToken
+  const canConfirm = canConfirmLive(control, challenge, Boolean(settingsToken))
+  const validCap = Number.isFinite(Number(cap)) && Number(cap) > 0
 
-  return (<>
-    <div className="topbar">
-      <div><div className="topbar-title">운영·보안</div><div className="topbar-sub">작업자·데이터·원장·경보·실거래 전환을 한 화면에서 감사하고 제어합니다.</div></div>
-      <div className={`chip ${control.live_enabled?'bad':'good'}`}>{control.live_enabled?'실거래 활성':'모의투자 보호'}</div>
+  useEffect(() => {
+    const deadline = Date.parse(control?.expires_at)
+    if (!Number.isFinite(deadline)) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => refresh(['live', 'security'], controller.signal), Math.max(0, deadline - Date.now()))
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [control?.expires_at])
+
+  function challengeLive() {
+    perform('/api/live/challenge', { confirmation: 'I UNDERSTAND LIVE ORDERS' }, result => {
+      if (result?.challenge_token) {
+        setChallenge({ token: result.challenge_token, expires: result.expires_at })
+        return '1차 확인 완료. 5분 안에 2차 확인을 진행하세요.'
+      }
+    })
+  }
+
+  function confirmLive() {
+    if (!canConfirmLive(control, challenge, Boolean(settingsToken))) return
+    perform('/api/live/confirm', { challenge_token: challenge.token, confirmation: 'ENABLE LIVE TRADING', duration_minutes: 240 }, result => {
+      if (result?.live_enabled) setChallenge(null)
+    })
+  }
+
+  return <div className="terminal ops-terminal">
+    <header className="terminal-header">
+      <div><p className="terminal-eyebrow">HOYA / 시스템 운영</p><h1>운영·보안</h1></div>
+      <div className="terminal-header-actions">
+        <span className={`terminal-tag ${control?.live_enabled === false ? 'good' : 'warn'}`}>{mode}</span>
+        <button type="button" className="ops-button" disabled={busy} onClick={() => perform(null)}>새로고침</button>
+      </div>
+    </header>
+    <MetricStrip items={[
+      ['수집기', state, state === '실행 중' ? 'good' : 'warn'],
+      ['모의투자 작업자', statusText(worker?.alive, '실행 중', '중지'), tone(worker?.alive)],
+      ['원장 무결성', statusText(integrity?.ok, '정상', '실패'), tone(integrity?.ok)],
+      ['활성 경보', number(ops?.active_count, 0), ops?.active_count > 0 ? 'warn' : undefined],
+      ['세션 갱신 (KST)', timeLabel(audit?.last_update)],
+    ]} />
+    {unavailable.length > 0 && <p className="ops-notice warn" role="status">일부 상태를 불러오지 못했습니다. 미확인 항목을 새로고침할 수 있습니다.</p>}
+    {feedback && <p className={`ops-notice ${feedback.warning ? 'warn' : 'good'}`} role={feedback.warning ? 'alert' : 'status'}>{feedback.message}</p>}
+    <div className="terminal-workspace">
+      <section className="terminal-panel ops-main-panel">
+        <div className="ops-panel-heading terminal-panel-heading"><h2>시장 데이터 수집</h2><span className="terminal-tag">15초 간격 갱신</span></div>
+        <MarketStatus runtime={runtime} />
+        <div className="terminal-summary">
+          <span>수집 오류 {number(runtimeErrors, 0)}건</span><span>원장 검증 {number(integrity?.events_checked, 0)}건</span>
+          <span>위험 경보 {number(ops?.critical_count, 0)}건</span>
+        </div>
+        <div className="terminal-context terminal-divider ops-tasks">
+          <h2>수집·세션 제어</h2>
+          <div className="ops-actions">{[['resume', '수집 재개'], ['pause', '수집 일시정지'], ['retry', '실패 작업 재시도']].map(([action, label]) =>
+            <button key={action} type="button" className="ops-button" disabled={locked} onClick={() => perform('/api/runtime/control', { action })}>{label}</button>)}
+            <button type="button" className="ops-button" disabled={locked} onClick={() => perform('/api/paper/resume')}>기존 모의투자 재개</button>
+          </div>
+          <h2>원장·일간 리포트</h2>
+          <div className="ops-actions">
+            <button type="button" className="ops-button" disabled={locked} onClick={() => perform('/api/paper/ledger/backup', null,
+              result => result?.path && `백업 파일 · ${result.path}`)}>원장 백업</button>
+            <button type="button" className="ops-button" disabled={locked} onClick={() => perform('/api/paper/ledger/export', null,
+              result => result?.path && `CSV 파일 · ${result.path}`)}>CSV 내보내기</button>
+            <button type="button" className="ops-button" disabled={locked} onClick={() => perform('/api/operations/daily-report/send', null,
+              result => result?.notified_at ? `리포트 생성 완료 · 마지막 알림 ${timeLabel(result.notified_at)} (KST)`
+                : '리포트 생성 완료 · 전송 기록 없음')}>일간 리포트 전송</button>
+          </div>
+        </div>
+      </section>
+      <aside className="terminal-panel terminal-context ops-control" aria-label="실거래 안전 제어">
+        <div className="terminal-panel-heading"><h2>실거래 안전 제어</h2><Link href="/risk">위험 정책 ↗</Link></div>
+        <p className="ops-muted">설정 토큰과 두 번의 확인이 필요합니다. 활성화 후 4시간에 자동 만료됩니다.</p>
+        <label>설정 토큰<input type="password" value={settingsToken} disabled={busy} autoComplete="off"
+          onChange={event => { setSettingsToken(event.target.value); setChallenge(null) }} /></label>
+        <form className="ops-cap" onSubmit={event => { event.preventDefault(); if (validCap) perform('/api/live/order-cap', { max_order_usdt: Number(cap) }) }}>
+          <label>건당 주문 상한 (USDT)<input type="number" min="0" step="any" value={cap} disabled={busy} onChange={event => setCap(event.target.value)} /></label>
+          <button type="submit" className="ops-button" disabled={locked || !validCap}>상한 저장</button>
+        </form>
+        <dl className="terminal-facts">
+          <div><dt>1차 확인</dt><dd>{canConfirm ? `완료 · ${timeLabel(challenge.expires)}` : '확인 대기'}</dd></div>
+          <div><dt>실거래 만료 (KST)</dt><dd>{timeLabel(control?.expires_at)}</dd></div>
+        </dl>
+        <div className="ops-actions ops-control-actions">
+          <button type="button" className="ops-button" disabled={locked || control?.live_enabled !== false} onClick={challengeLive}>1차 실거래 확인</button>
+          <button type="button" className="ops-button ops-danger" disabled={locked || !canConfirm} onClick={confirmLive}>2차 실거래 활성화</button>
+          <button type="button" className="ops-button" disabled={locked || !control?.live_enabled} onClick={() => perform('/api/live/disable', null, () => setChallenge(null))}>즉시 모의투자 전환</button>
+        </div>
+      </aside>
     </div>
-
-    <h1 className="page-title">운영·보안</h1>
-    <p className="page-sub">민감정보는 표시하지 않으며, 실거래는 설정 토큰과 두 번의 명시적 확인을 모두 통과해야 제한 시간 동안만 활성화됩니다.</p>
-    {message&&<div className="card soft" style={{marginBottom:18,padding:14}}>{message}</div>}
-
-    <RuntimePanel settingsToken={settingsToken} />
-    <div className="grid">
-      <div className="card span-3 emphasis"><div className="metric-label">작업자</div><div className={`metric-value ${worker.alive?'good':'bad'}`}>{worker.alive?'정상':'중지'}</div><div className="metric-note">PID {worker.pid||'-'}</div></div>
-      <div className="card span-3"><div className="metric-label">원장 무결성</div><div className={`metric-value ${integrity.ok?'good':'bad'}`}>{integrity.ok?'정상':'실패'}</div><div className="metric-note">이벤트 {integrity.events_checked||0}건 확인</div></div>
-      <div className="card span-3"><div className="metric-label">활성 경보</div><div className="metric-value mono">{ops?.active_count||0}</div><div className="metric-note">위험 {ops?.critical_count||0}건</div></div>
-      <div className="card span-3"><div className="metric-label">마지막 갱신</div><div className="metric-value mono" style={{fontSize:18}}>{fmtDate(audit.last_update)}</div><div className="metric-note">모의투자 실행 상태</div></div>
-
-      <div className="card span-7">
-        <div className="split"><div><div className="section-title">실거래 안전 제어</div><div className="section-sub">기본 모의투자, 5분 인증, 2차 확인, 4시간 자동 만료, 주문 금액 상한을 강제합니다.</div></div><div className={`chip ${control.live_enabled?'bad':'good'}`}>{control.live_enabled?'실거래':'모의투자'}</div></div>
-        <div className="mini-grid">
-          <div><div className="metric-label">설정 토큰</div><input type="password" value={settingsToken} onChange={event=>setSettingsToken(event.target.value)} placeholder="X-Settings-Token" autoComplete="off" /></div>
-          <div><div className="metric-label">최대 주문 USDT</div><input type="number" value={cap} onChange={event=>setCap(event.target.value)} /></div>
-          <div><div className="metric-label">실거래 만료</div><div className="metric-note mono">{fmtDate(control.expires_at)}</div></div>
-          <div><div className="metric-label">인증 상태</div><div className="metric-note">{challenge?'1차 확인 완료':'미요청'} / {fmtDate(control.challenge_expires_at)}</div></div>
-        </div>
-        <div className="button-row" style={{marginTop:16}}>
-          <button disabled={busy||!settingsToken} onClick={()=>mutate('/api/live/order-cap',{max_order_usdt:Number(cap)})}>상한 저장</button>
-          <button disabled={busy||!settingsToken||control.live_enabled} onClick={requestChallenge}>1차 실거래 확인</button>
-          <button disabled={busy||!settingsToken||!challenge||control.live_enabled} onClick={confirmLive}>2차 실거래 활성화</button>
-          <button disabled={busy||!settingsToken||!control.live_enabled} onClick={()=>mutate('/api/live/disable')}>즉시 모의투자 전환</button>
-        </div>
-      </div>
-
-      <div className="card span-5">
-        <div className="section-title">암호화된 자격증명</div>
-        <div className="section-sub">값은 Fernet으로 암호화되며 API와 화면에는 이름/설정 여부만 반환된다.</div>
-        <div style={{display:'flex',flexDirection:'column',gap:12}}>
-          <select value={secretName} onChange={event=>setSecretName(event.target.value)}>{SECRET_NAMES.map(name=><option key={name} value={name}>{name}</option>)}</select>
-          <input type="password" value={secretValue} onChange={event=>setSecretValue(event.target.value)} placeholder="저장할 값 (화면에 재표시되지 않음)" autoComplete="new-password" />
-          <div className="button-row"><button disabled={busy||!settingsToken||!secretValue} onClick={storeSecret}>암호화 저장</button></div>
-        </div>
-        <div style={{marginTop:14,display:'flex',gap:8,flexWrap:'wrap'}}>{vaultSecrets.map(secret=><span key={secret.name} className="chip good">{secret.name} · 저장됨</span>)}</div>
-        <div className={`chip ${security?.vault?.encryption_configured?'good':'warn'}`} style={{marginTop:14}}>{security?.vault?.encryption_configured?'마스터 키 준비됨':'마스터 키 필요'}</div>
-      </div>
-
-      <div className="card span-12">
-        <div className="section-title">운영 작업</div>
-        <div className="button-row">
-          <button disabled={busy||!settingsToken} onClick={()=>simpleAction('/api/paper/ledger/backup')}>원장 백업</button>
-          <button disabled={busy||!settingsToken} onClick={()=>simpleAction('/api/paper/ledger/export')}>CSV 내보내기</button>
-          <button disabled={busy||!settingsToken} onClick={()=>simpleAction('/api/operations/daily-report/send')}>일간 리포트 전송</button>
-          <button disabled={busy} onClick={()=>load().catch(error=>setMessage(error.message))}>새로고침</button>
-        </div>
-      </div>
-
-      <div className="card span-12"><div className="section-title">운영 경보</div><table className="table"><thead><tr><th>상태</th><th>심각도</th><th>분류</th><th>마지막 감지</th><th>횟수</th><th>메시지</th></tr></thead><tbody>{alerts.slice(0,30).map(alert=><tr key={alert.alert_id}><td>{koStatus(alert.status)}</td><td className={alert.severity==='critical'?'bad':alert.severity==='warning'?'warn':'good'}>{koStatus(alert.severity)}</td><td>{koCategory(alert.category)}</td><td className="mono">{fmtDate(alert.last_seen_at)}</td><td className="mono">{alert.occurrence_count}</td><td>{koAlertMessage(alert.message)}</td></tr>)}</tbody></table></div>
-
-      <div className="card span-6"><div className="section-title">설정 변경 이력</div><table className="table"><thead><tr><th>시간</th><th>작업자</th><th>작업</th></tr></thead><tbody>{history.slice(0,20).map(row=><tr key={row.sequence}><td className="mono">{fmtDate(row.changed_at)}</td><td>{row.actor}</td><td>{row.action}</td></tr>)}</tbody></table></div>
-      <div className="card span-6"><div className="section-title">감사 이벤트 이력</div><table className="table"><thead><tr><th>시간</th><th>유형</th><th>버전</th></tr></thead><tbody>{events.slice(0,20).map(row=><tr key={row.event_id}><td className="mono">{fmtDate(row.occurred_at)}</td><td>{row.event_type}</td><td>{row.strategy_version||'-'}</td></tr>)}</tbody></table></div>
-    </div>
-  </>)
+    <Tabs tabs={[
+      ['운영 경보', <Alerts key="alerts" ops={ops} />],
+      ['수집 로그', <JobHistory key="jobs" runtime={runtime} />],
+      ['세션 평가', <CampaignHistory key="campaigns" runtime={runtime} />],
+      ['신호 결과', <SignalResults key="signals" signals={runtime?.signals} />],
+      ['설정·감사', <Audit key="audit" live={live} audit={audit} />],
+      ['자격증명', <Vault key="vault" security={security} locked={locked} store={(body, reset) =>
+        perform('/api/security/secrets', body, result => { if (result?.stored) reset() })} />],
+    ]} />
+  </div>
 }
