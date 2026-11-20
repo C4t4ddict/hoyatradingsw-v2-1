@@ -51,7 +51,7 @@ class PredictionProbabilityTests(unittest.TestCase):
                     }
                     with (
                         patch.object(predict_model_bidirectional, "MODEL_DIR", model_dir),
-                        patch.object(predict_model_bidirectional.joblib, "load", return_value=bundle),
+                        patch.object(predict_model_bidirectional, "load_local_model", return_value=bundle),
                     ):
                         result = predict_model_bidirectional._predict_one(event, target)
                 self.assertEqual(result["classes"], [label])
@@ -64,7 +64,7 @@ class PredictionProbabilityTests(unittest.TestCase):
             model_path.touch()
             bundle = {"prep": IdentityPreprocessor(), "model": SingleClassModel(1)}
             predict_model_bidirectional.clear_model_cache()
-            with patch.object(predict_model_bidirectional.joblib, "load", return_value=bundle) as load:
+            with patch.object(predict_model_bidirectional, "load_local_model", return_value=bundle) as load:
                 first = predict_model_bidirectional._load_model_bundle(model_path)
                 second = predict_model_bidirectional._load_model_bundle(model_path)
                 self.assertIs(first, second)
@@ -84,7 +84,7 @@ class PredictionProbabilityTests(unittest.TestCase):
             predict_model_bidirectional.clear_model_cache()
             with (
                 patch.object(predict_model_bidirectional, "MODEL_DIR", model_dir),
-                patch.object(predict_model_bidirectional.joblib, "load", return_value=bundle),
+                patch.object(predict_model_bidirectional, "load_local_model", return_value=bundle),
             ):
                 result = predict_model_bidirectional._predict_one(event, "label_up_5m")
 

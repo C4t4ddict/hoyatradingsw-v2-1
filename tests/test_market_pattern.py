@@ -46,7 +46,7 @@ class MarketPatternDatasetTests(unittest.TestCase):
 
 
 class MarketPatternReadinessTests(unittest.TestCase):
-    @patch("market_pattern.joblib.load")
+    @patch("market_pattern.load_local_model")
     def test_latest_failed_validation_blocks_stale_model_file(self, load_model):
         with tempfile.TemporaryDirectory() as directory:
             model_dir = Path(directory)

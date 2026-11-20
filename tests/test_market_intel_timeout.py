@@ -20,13 +20,13 @@ class _Response:
     def __exit__(self, *args):
         return False
 
-    def read(self):
+    def read(self, size=-1):
         return self.payload
 
 
 class MarketIntelTimeoutTests(unittest.TestCase):
     @patch("market_intel.feedparser.parse")
-    @patch("market_intel.urlopen", return_value=_Response())
+    @patch("market_intel.open_public_request", return_value=_Response())
     def test_source_connection_receives_explicit_timeout(self, urlopen, parse):
         parse.return_value = FeedParserDict(version='rss20', bozo=False, entries=[])
         market_intel._parse_source(Source("one", "https://example.test/rss", "news", 1.0), 8, 1.25)

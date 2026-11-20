@@ -6,10 +6,10 @@ export async function fetchJson(path){
   return r.json()
 }
 
-export async function postJson(path, body){
+export async function postJson(path, body, settingsToken){
   const r = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(settingsToken && { 'X-Settings-Token': settingsToken }) },
     body: JSON.stringify(body),
   })
   const payload = await r.json().catch(() => ({}))

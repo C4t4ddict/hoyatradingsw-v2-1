@@ -1,5 +1,8 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from webhook_server import app as legacy_app
 from backend.app.routes.overview import router as overview_router
 from backend.app.routes.paper import router as paper_router
@@ -13,8 +16,29 @@ from backend.app.routes.security import router as security_router
 from backend.app.routes.backtests import router as backtests_router
 from backend.app.routes.runtime import router as runtime_router
 
-app = FastAPI(title='HoyaTradingSW v2.1 API')
-app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
+def _configured_values(name):
+    return [value.strip() for value in os.getenv(name, '').split(',') if value.strip() and '*' not in value]
+
+
+app = FastAPI(title='HoyaTradingSW v2.1 API', docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['http://127.0.0.1:3001', 'http://localhost:3001', *_configured_values('HOYA_WEB_ORIGINS')],
+    allow_methods=['GET', 'POST', 'DELETE'],
+    allow_headers=['Content-Type', 'X-Settings-Token', 'X-Webhook-Token'],
+)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', *_configured_values('HOYA_WEB_HOSTS')])
+
+
+@app.middleware('http')
+async def protect_api_responses(request, call_next):
+    response = await call_next(request)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Content-Security-Policy'] = "default-src 'none'; frame-ancestors 'none'"
+    return response
+
+
 app.mount('/legacy', legacy_app)
 app.include_router(overview_router)
 app.include_router(paper_router)

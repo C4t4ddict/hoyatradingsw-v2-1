@@ -20,7 +20,7 @@ class Response:
     def __exit__(self, *args):
         pass
 
-    def read(self):
+    def read(self, size=-1):
         return self.payload
 
 
@@ -61,7 +61,7 @@ class SourceRecoveryTests(unittest.TestCase):
 
     def test_reuters_filter_precedes_limit_and_preserves_transport_metadata(self):
         payload = rss(article('https://other.test'), article(None), article())
-        with patch('market_intel.urlopen', return_value=Response(payload)) as request:
+        with patch('market_intel.open_public_request', return_value=Response(payload)) as request:
             rows = _parse_source(self.reuters, 1, 1.25)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['source'], 'Reuters Business')
@@ -72,20 +72,20 @@ class SourceRecoveryTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs['timeout'], 1.25)
 
     def test_unverified_reuters_entries_are_not_scored(self):
-        with patch('market_intel.urlopen', return_value=Response(rss(article(None), article('https://reuters.com.evil.test')))):
+        with patch('market_intel.open_public_request', return_value=Response(rss(article(None), article('https://reuters.com.evil.test')))):
             self.assertEqual(_parse_source(self.reuters, 12, 1), [])
 
     def test_html_error_and_invalid_xml_are_failures_not_empty_success(self):
         for payload in ('<html><title>Access denied</title></html>', '<rss><broken'):
-            with self.subTest(payload=payload), patch('market_intel.urlopen', return_value=Response(payload)):
+            with self.subTest(payload=payload), patch('market_intel.open_public_request', return_value=Response(payload)):
                 with self.assertRaises(ValueError):
                     _parse_source(Source('RSS','https://example.test','news',.7), 12, 1)
 
     def test_valid_empty_rss_and_regular_rss_remain_supported(self):
         src = Source('RSS','https://example.test','news',.7)
-        with patch('market_intel.urlopen', return_value=Response(rss())):
+        with patch('market_intel.open_public_request', return_value=Response(rss())):
             self.assertEqual(_parse_source(src, 12, 1), [])
-        with patch('market_intel.urlopen', return_value=Response(rss(article(None)))):
+        with patch('market_intel.open_public_request', return_value=Response(rss(article(None)))):
             self.assertEqual(len(_parse_source(src, 12, 1)), 1)
 
     def test_treasury_dates_entities_links_and_dedup(self):
@@ -95,7 +95,7 @@ class SourceRecoveryTests(unittest.TestCase):
         self.assertEqual(entries[0]['title'], 'Treasury sanctions crypto & banks')
         self.assertEqual(entries[0]['published'], '2026-11-18T12:00:00Z')
         self.assertEqual(entries[0]['link'], 'https://home.treasury.gov/news/press-releases/sb9999')
-        with patch('market_intel.urlopen', return_value=Response(html)):
+        with patch('market_intel.open_public_request', return_value=Response(html)):
             row = _parse_source(self.treasury, 12, 1)[0]
         self.assertEqual(row['source_transport'], 'treasury_html')
         self.assertEqual(row['kind'], 'official')
@@ -123,7 +123,7 @@ class SourceRecoveryTests(unittest.TestCase):
                 raise OSError('old DNS failure')
             store.run_job(name, fail, 300, now=1)
             with patch('market_intel._iter_sources', return_value=[self.reuters]), \
-                 patch('market_intel.urlopen', return_value=Response(rss(article()))), \
+                 patch('market_intel.open_public_request', return_value=Response(rss(article()))), \
                  patch('ml_dataset.append_events', return_value=1), \
                  patch('predict_model_bidirectional.predict_event_bidirectional', return_value={}):
                 collect_news(store)
@@ -139,7 +139,7 @@ class SourceRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = EvaluationStore(str(Path(directory)/'runtime.db'))
             with patch('market_intel._iter_sources', return_value=[self.reuters,self.treasury]), \
-                 patch('market_intel.urlopen', side_effect=[OSError('offline'),Response('<main>'+release()+'</main>')]), \
+                 patch('market_intel.open_public_request', side_effect=[OSError('offline'),Response('<main>'+release()+'</main>')]), \
                  patch('ml_dataset.append_events', return_value=1), \
                  patch('predict_model_bidirectional.predict_event_bidirectional', return_value={}):
                 collect_news(store)

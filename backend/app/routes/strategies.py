@@ -1,10 +1,11 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from strategy_governance import StrategyRegistry
+from backend.app.routes.security import require_operator
 
 
 router = APIRouter()
@@ -27,7 +28,6 @@ class StrategyTransition(BaseModel):
     metrics: Dict[str, Any]
     evidence: Dict[str, Any]
     manual_approved: bool = False
-    approved_by: Optional[str] = None
 
 
 @router.get('/api/strategies')
@@ -35,7 +35,7 @@ def list_strategies():
     return {"strategies": _registry().list()}
 
 
-@router.post('/api/strategies')
+@router.post('/api/strategies', dependencies=[Depends(require_operator)])
 def register_strategy(body: StrategyRegistration):
     try:
         return _registry().register(**body.model_dump())
@@ -52,17 +52,19 @@ def get_strategy(strategy_id: str):
         raise HTTPException(status_code=404, detail="strategy not found") from exc
 
 
-@router.post('/api/strategies/{strategy_id}/transition')
+@router.post('/api/strategies/{strategy_id}/transition', dependencies=[Depends(require_operator)])
 def transition_strategy(strategy_id: str, body: StrategyTransition):
     try:
-        return _registry().request_transition(strategy_id, **body.model_dump())
+        return _registry().request_transition(
+            strategy_id, approved_by='settings-operator' if body.manual_approved else None, **body.model_dump(),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="strategy not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post('/api/strategies/{strategy_id}/demote')
+@router.post('/api/strategies/{strategy_id}/demote', dependencies=[Depends(require_operator)])
 def demote_strategy(strategy_id: str, metrics: Dict[str, Any]):
     try:
         return _registry().auto_demote(strategy_id, metrics)
