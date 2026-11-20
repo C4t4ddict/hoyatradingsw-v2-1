@@ -1,70 +1,112 @@
+import Link from 'next/link'
 import { fetchJson } from '../../lib/api'
-import { koBoolean } from '../../lib/ko'
+import { koFallback, koStrategy } from '../../lib/ko'
+import { number, percent, timeLabel } from '../../lib/trading-chart.mjs'
+import { DetailTable, MetricStrip, Tabs } from '../terminal/Terminal'
+import '../terminal/terminal.css'
+import './risk.css'
 
-function Row({label, value, className=''}){
-  return <tr><td>{label}</td><td className={className}>{String(value ?? '-')}</td></tr>
+const POLICY_FIELDS = [
+  ['dry_run', '모의 실행 강제'], ['require_idempotency_key', '중복 주문 방지 키 필수'],
+  ['live_allowed_tags', '실거래 허용 태그'], ['test_tag_force_dry_run', '테스트 태그 모의 실행'],
+  ['auto_select_version', '전략 버전 자동 선택'], ['trading_window_utc', '거래 허용 시간 (UTC)'],
+  ['vol_pause_enabled', '급변동 시 주문 제한'], ['vol_lookback_candles', '변동성 관측 봉 수'],
+  ['vol_spike_threshold_pct', '급변동 기준', value => percent(value)],
+  ['market_intel_filter_enabled', '시장 정보 필터'], ['market_intel_min_score', '시장 정보 점수 하한'],
+  ['market_intel_block_bearish', '하락 국면 차단'], ['market_intel_size_up_bullish', '상승 시 주문 크기 배수'],
+  ['market_intel_size_down_bearish', '하락 시 주문 크기 배수'], ['market_intel_auto_refresh_sec', '브리핑 갱신 간격 (초)'],
+  ['ml_filter_enabled', 'ML 필터'], ['ml_min_up_proba_4h', '4시간 상승 확률 하한', value => percent(value, 100)],
+  ['ml_block_low_confidence', '낮은 신뢰도 차단'], ['ml_weight_1h', 'ML 1시간 가중치'], ['ml_weight_4h', 'ML 4시간 가중치'],
+  ['ml_weight_24h', 'ML 24시간 가중치'], ['ml_min_composite_score', 'ML 종합 점수 하한'],
+  ['ml_min_short_confirm', 'ML 매도 확인 하한'],
+]
+const REASONS = {
+  daily_loss_limit: '일일 손실 한도', drawdown_buy_block: '낙폭에 따른 신규 매수 차단',
+  stale_market_data: '시세 지연', kill_switch: '긴급 중지',
+}
+const onOff = (value, on = '사용', off = '미사용') => value === true ? on : value === false ? off : '미확인'
+const multiple = value => value == null ? '—' : `${number(value, 0)}배`
+const valueLabel = value => Array.isArray(value) ? value.join(', ') || '없음'
+  : typeof value === 'boolean' ? onOff(value) : value ?? '—'
+
+function RiskFacts({ items }) {
+  return <dl className="terminal-facts">{items.map(([label, value]) =>
+    <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
 }
 
-function buildRiskState(spot, futures){
-  if (futures.enabled === false || spot.enabled === false) return { label:'보호 정책 꺼짐', className:'bad' }
-  if (futures.max_leverage && Number(futures.max_leverage) <= 5) return { label:'엄격한 정책', className:'warn' }
-  return { label:'보호 정책 작동 중', className:'good' }
-}
+export default async function RiskPage() {
+  const [riskResult, paperResult] = await Promise.allSettled([fetchJson('/api/risk'), fetchJson('/api/paper')])
+  const risk = riskResult.status === 'fulfilled' ? riskResult.value : null
+  const paper = paperResult.status === 'fulfilled' ? paperResult.value : null
+  const spot = risk?.risk_guard?.spot
+  const futures = risk?.risk_guard?.futures
+  const policy = risk?.execution_policy
+  const live = policy?.live_control
+  const session = paper?.risk_status
+  const protection = spot?.enabled === false || futures?.enabled === false ? ['보호 비활성', 'bad']
+    : spot?.enabled === true && futures?.enabled === true ? ['보호 사용 중', 'good'] : ['보호 상태 미확인', 'warn']
+  const mode = policy?.dry_run === true ? '모의 실행 강제'
+    : live?.live_enabled === true ? '실거래 제어 활성' : live?.live_enabled === false ? '모의투자 보호' : '미확인'
+  const notices = [...new Set([...(session?.rejected ?? []), ...(session?.data_quality?.errors ?? [])])]
+  const limits = [
+    ['보호 정책', 'enabled', onOff], ['일일 손실 한도 (USDT)', 'daily_loss_limit_usdt', number],
+    ['연속 손실 한도', 'max_consecutive_losses', value => number(value, 0)],
+    ['최대 보유 포지션', 'max_open_positions', value => number(value, 0)],
+    ['최대 레버리지', 'max_leverage', multiple],
+    ['매도 포지션', 'allow_short', value => onOff(value, '허용', '차단')],
+  ]
 
-const policyLabels={dry_run:'모의 실행',live_control:'실거래 제어',require_idempotency_key:'중복 주문 방지 키 필수',test_tag_force_dry_run:'테스트 태그 모의 실행 강제'}
-function policyValue(key,value){
-  if(key==='live_control') return value?.live_enabled?'실거래 활성':'모의투자 보호'
-  if(typeof value==='boolean') return koBoolean(value)
-  return typeof value==='object'?JSON.stringify(value):value
-}
-
-export default async function RiskPage(){
-  let data=null
-  try { data=await fetchJson('/api/risk') } catch {}
-  const guards=data?.risk_guard||{}
-  const spot=guards.spot||{}
-  const futures=guards.futures||{}
-  const executionPolicy=data?.execution_policy||{}
-  const warnings=[
-    !futures.enabled?'선물 위험 보호 정책이 꺼져 있습니다.':null,
-    !spot.enabled?'현물 위험 보호 정책이 꺼져 있습니다.':null,
-    futures.max_leverage?`최대 레버리지 ${futures.max_leverage}배`:null,
-    futures.allow_short===false?'선물 매도 포지션이 차단되어 있습니다.':null,
-  ].filter(Boolean)
-  const riskState=buildRiskState(spot,futures)
-
-  return (<>
-    <div className="topbar"><div><div className="topbar-title">위험 관리 인텔리전스</div><div className="topbar-sub">손실 제한, 연속 손실, 포지션 제한과 실행 정책을 운영 관점에서 보여줍니다.</div></div><div className={`chip ${riskState.className}`}>{riskState.label}</div></div>
-    <h1 className="page-title">위험 관리</h1>
-    <p className="page-sub">낙폭, 일일 손실, 레버리지, 포지션 한도와 실행 정책을 한 화면에서 확인합니다.</p>
-
-    <div className="grid">
-      <div className="card span-3 emphasis"><div className="metric-label">현물 보호</div><div className="metric-value">{spot.enabled?'사용':'미사용'}</div><div className="metric-note">현물 위험 보호 상태</div></div>
-      <div className="card span-3"><div className="metric-label">선물 보호</div><div className="metric-value">{futures.enabled?'사용':'미사용'}</div><div className="metric-note">선물 위험 보호 상태</div></div>
-      <div className="card span-3"><div className="metric-label">최대 레버리지</div><div className="metric-value mono">{futures.max_leverage??'-'}배</div><div className="metric-note">허용 가능한 최대 배수</div></div>
-      <div className="card span-3"><div className="metric-label">매도 정책</div><div className="metric-value">{futures.allow_short?'허용':'차단'}</div><div className="metric-note">선물 매도 포지션 허용 여부</div></div>
-
-      <div className="card span-6"><div className="section-title">현물 위험 한도</div><table className="table"><tbody>
-        <Row label="정책 사용" value={koBoolean(spot.enabled)} className={spot.enabled?'good mono':'bad mono'} />
-        <Row label="일일 손실 한도 (USDT)" value={spot.daily_loss_limit_usdt} className="mono" />
-        <Row label="최대 연속 손실" value={spot.max_consecutive_losses} className="mono" />
-        <Row label="최대 보유 포지션" value={spot.max_open_positions} className="mono" />
-      </tbody></table></div>
-
-      <div className="card span-6"><div className="section-title">선물 위험 한도</div><table className="table"><tbody>
-        <Row label="정책 사용" value={koBoolean(futures.enabled)} className={futures.enabled?'good mono':'bad mono'} />
-        <Row label="일일 손실 한도 (USDT)" value={futures.daily_loss_limit_usdt} className="mono" />
-        <Row label="최대 연속 손실" value={futures.max_consecutive_losses} className="mono" />
-        <Row label="최대 보유 포지션" value={futures.max_open_positions} className="mono" />
-        <Row label="최대 레버리지" value={futures.max_leverage} className="mono" />
-        <Row label="매도 포지션 허용" value={koBoolean(futures.allow_short)} className={futures.allow_short?'good mono':'bad mono'} />
-      </tbody></table></div>
-
-      <div className="card span-4"><div className="section-title">주의 사항</div><div className="section-sub">현재 실행 정책에서 확인할 항목입니다.</div><div style={{display:'flex',flexDirection:'column',gap:10}}>{warnings.length?warnings.map((warning,index)=><div key={index} className="chip warn">{warning}</div>):<div className="chip good">현재 정책이 안정적으로 적용 중입니다.</div>}</div></div>
-
-      <div className="card span-8"><div className="section-title">실행 정책</div><div className="section-sub">현재 백엔드가 강제하는 주문 실행 정책입니다.</div><table className="table"><tbody>{Object.entries(executionPolicy).map(([key,value])=><Row key={key} label={policyLabels[key]||key} value={policyValue(key,value)} className="mono" />)}</tbody></table></div>
-
-      <div className="card span-12"><div className="section-title">위험 관리 설명</div><div className="section-sub">일일 손실, 연속 손실, 레버리지, 매도 허용 여부와 실행 정책을 함께 보여줘 운용 안정성을 빠르게 판단하도록 설계했습니다.</div></div>
+  return <div className="terminal risk-terminal">
+    <header className="terminal-header">
+      <div><p className="terminal-eyebrow">HOYA / 위험 정책</p><h1>위험 관리</h1></div>
+      <div className="terminal-header-actions">
+        <span className={`terminal-tag ${protection[1]}`}>{protection[0]}</span>
+        <Link className="terminal-link" href="/operations">운영·보안 ↗</Link>
+      </div>
+    </header>
+    <MetricStrip items={[
+      ['현물 보호', onOff(spot?.enabled), spot?.enabled ? 'good' : undefined],
+      ['선물 보호', onOff(futures?.enabled), futures?.enabled ? 'good' : undefined],
+      ['선물 최대 레버리지', multiple(futures?.max_leverage)],
+      ['주문 실행 모드', mode, mode === '실거래 제어 활성' ? 'warn' : undefined],
+      ['모의투자 현재 낙폭', percent(session?.drawdown_pct, 100)],
+    ]} />
+    <div className="terminal-workspace">
+      <section className="terminal-panel">
+        <div className="risk-panel-heading terminal-panel-heading"><h2>시장별 주문 보호 한도</h2><span className="terminal-tag">현물 / 선물</span></div>
+        <DetailTable columns={['보호 항목', '현물', 'USDT 무기한 선물']} empty="주문 보호 정책을 조회하지 못했습니다."
+          rows={risk ? limits.map(([label, key, format]) => ({ id: key, cells: [label, format(spot?.[key]), format(futures?.[key])] })) : []} />
+        <p className="terminal-summary">주문 서버에 설정된 한도입니다. 모의투자 세션 한도는 오른쪽에서 확인할 수 있습니다.</p>
+      </section>
+      <aside className="terminal-panel terminal-context" aria-label="모의투자 위험 요약">
+        <div className="terminal-panel-heading"><h2>모의투자 위험 요약</h2><Link href="/paper">모의투자 ↗</Link></div>
+        <RiskFacts items={[
+          ['일일 손실 한도', percent(paper?.daily_loss_limit_pct, 100)],
+          ['대기 주문', number(session?.pending_count, 0)],
+          ['시세 품질', onOff(session?.data_quality?.ok, '정상', '차단')],
+          ['세션 갱신 (KST)', timeLabel(paper?.last_update)],
+        ]} />
+        <div className="terminal-divider"><h2>차단·점검 사유</h2>
+          {notices.length ? <ul className="risk-notices warn">{notices.map(reason => <li key={reason}>{REASONS[reason] || reason}</li>)}</ul>
+            : <p className="risk-muted">{session ? '기록된 차단 사유 없음' : '세션 위험 상태 미확인'}</p>}
+        </div>
+      </aside>
     </div>
-  </>)
+    <Tabs tabs={[
+      ['주문 실행 정책', <div key="execution">
+        <div className="terminal-summary"><span>실거래 제어 {onOff(live?.live_enabled, '활성', '잠김')}</span>
+          <span>건당 주문 상한 {number(live?.max_order_usdt)} USDT</span><span>실거래 만료 (KST) {timeLabel(live?.expires_at)}</span></div>
+        <DetailTable columns={['실행 조건', '설정값']} empty="주문 실행 정책을 조회하지 못했습니다."
+          rows={policy ? POLICY_FIELDS.map(([key, name, format = valueLabel]) => ({ id: key, cells: [name, format(policy[key])] })) : []} />
+      </div>],
+      ['모의투자 진단', <div key="paper" className="terminal-context">
+        <RiskFacts items={[
+          ['실행 전략', koStrategy(paper?.executed_strategy)], ['현재 낙폭', percent(session?.drawdown_pct, 100)],
+          ['시세 품질', onOff(session?.data_quality?.ok, '정상', '차단')],
+          ['필요 완료 봉', number(session?.data_quality?.required_bars, 0)],
+          ['대체 정책', paper ? koFallback(paper.fallback_mode ?? undefined) : '미확인'],
+        ]} />
+      </div>],
+    ]} />
+  </div>
 }
