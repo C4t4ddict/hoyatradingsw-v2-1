@@ -8,4 +8,8 @@ __pycache__/
 .streamlit/secrets.toml
 data/
 frontend/.next/
+frontend/.next-dev/
+frontend/.env.local
+frontend/.env.production.local
 frontend/node_modules/
+.codex-screenshots/

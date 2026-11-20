@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Python tests and compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12.16"
+          cache: pip
+      - run: python -m pip install --upgrade pip setuptools
+      - run: python -m pip install -r requirements.txt
+      - name: Install research dependencies when present
+        shell: bash
+        run: |
+          if [[ -f research/requirements.txt ]]; then
+            python -m pip install -r research/requirements.txt
+          fi
+      - name: Test changed modules and their dependents
+        env:
+          TEST_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python scripts/test_changed.py --base "$TEST_BASE"
+      - run: python -m compileall backend
+      - run: bash -n run_all.sh
+      - name: Compile root Python modules
+        shell: bash
+        run: find . -maxdepth 1 -type f -name '*.py' -print0 | xargs -0 -r python -m py_compile
+
+  frontend:
+    name: Next.js build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.5"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

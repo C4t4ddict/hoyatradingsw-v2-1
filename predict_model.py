@@ -1,9 +1,25 @@
 from pathlib import Path
-import joblib
 import pandas as pd
+from model_artifacts import load_local_model
 
 MODEL_DIR = Path("data/models")
 MODEL_DIR_XGB_SHORT = Path("data/models_xgb_short")
+
+
+def _json_scalar(value):
+    return value.item() if hasattr(value, "item") else value
+
+
+def positive_probability(result: dict) -> float:
+    if not result or not result.get("ok"):
+        return 0.0
+    if "positive_proba" in result:
+        return float(result["positive_proba"])
+
+    probabilities = result.get("proba") or []
+    classes = result.get("classes") or list(range(len(probabilities)))
+    positive_index = next((index for index, label in enumerate(classes) if label == 1), None)
+    return float(probabilities[positive_index]) if positive_index is not None else 0.0
 
 
 def _load_bundle(target_col: str):
@@ -12,7 +28,7 @@ def _load_bundle(target_col: str):
     for base in search_dirs:
         model_path = base / f"{target_col}.joblib"
         if model_path.exists():
-            bundle = joblib.load(model_path)
+            bundle = load_local_model(model_path)
             bundle["_model_path"] = str(model_path)
             bundle["_model_family"] = "xgboost-short" if base == MODEL_DIR_XGB_SHORT else "sklearn-stable"
             return bundle
@@ -46,15 +62,22 @@ def _predict_one(event: dict, target_col: str) -> dict:
     if hasattr(Xt, "toarray"):
         Xt = Xt.toarray()
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(Xt)[0].tolist()
+        proba = [float(value) for value in model.predict_proba(Xt)[0]]
+        classes = [_json_scalar(value) for value in getattr(model, "classes_", range(len(proba)))]
+        positive_index = next((index for index, label in enumerate(classes) if label == 1), None)
+        positive_proba = proba[positive_index] if positive_index is not None else 0.0
     else:
         score = float(model.predict(Xt)[0])
         proba = [1.0 - score, score]
+        classes = [0, 1]
+        positive_proba = score
     pred = int(model.predict(Xt)[0])
     return {
         "ok": True,
         "pred_up": pred,
         "proba": proba,
+        "classes": classes,
+        "positive_proba": float(positive_proba),
         "model_family": bundle.get("_model_family"),
         "model_path": bundle.get("_model_path"),
     }

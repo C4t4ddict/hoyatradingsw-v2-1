@@ -1,0 +1,16 @@
+{
+  "as_of_utc": "2026-08-25T00:44:42.912074+00:00",
+  "execution": "signal at close; position begins next bar open",
+  "price_interval": "4h",
+  "warmup_start": "2021-08-01 UTC",
+  "spot_cost_bps_per_turnover": 13,
+  "futures_cost_bps_per_turnover": 8,
+  "funding": "actual Binance USD-M history; positive rate is paid by longs and received by shorts",
+  "leverage": "maximum absolute exposure 1.0x",
+  "known_limits": [
+    "OHLCV bars cannot model order-book depth or gap-dependent fills.",
+    "The same USD-M perpetual price series is used as a price proxy for spot strategies.",
+    "No tax, exchange outage, delisting, or account-specific fee tier is modeled.",
+    "Fixed-rule validation is not proof of future profitability."
+  ]
+}

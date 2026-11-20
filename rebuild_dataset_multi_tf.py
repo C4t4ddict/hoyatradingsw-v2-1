@@ -1,37 +1,16 @@
-from datetime import datetime, timedelta, timezone
-
 from exchange import get_exchange
 from ml_dataset import load_events, enrich_with_price_labels
+from ml_market_data import fetch_ohlcv_range
 
 
 def fetch_range(ex, symbol: str, timeframe: str, days: int, limit_per_call: int = 1000):
-    tf_minutes = {"5m": 5, "15m": 15, "1h": 60}[timeframe]
-    since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
-    end = int(datetime.now(timezone.utc).timestamp() * 1000)
-    step = tf_minutes * 60 * 1000 * limit_per_call
-    rows = []
-    cur = since
-    while cur < end:
-        chunk = ex.fetch_ohlcv(symbol, timeframe=timeframe, since=cur, limit=limit_per_call)
-        if not chunk:
-            break
-        rows.extend(chunk)
-        last_ts = chunk[-1][0]
-        nxt = last_ts + tf_minutes * 60 * 1000
-        if nxt <= cur:
-            break
-        cur = nxt
-        if len(chunk) < limit_per_call:
-            break
-    # dedupe
-    seen = set()
-    out = []
-    for r in rows:
-        if r[0] in seen:
-            continue
-        seen.add(r[0])
-        out.append(r)
-    return out
+    return fetch_ohlcv_range(
+        ex,
+        symbol,
+        timeframe,
+        days,
+        limit_per_call=limit_per_call,
+    )
 
 
 def main():

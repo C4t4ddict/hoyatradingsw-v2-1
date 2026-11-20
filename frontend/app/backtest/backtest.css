@@ -1,0 +1,11 @@
+.backtest-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0; padding: 0; border: 0; min-width: 0; }
+.backtest-inputs label { display: grid; gap: 4px; min-width: 0; color: var(--terminal-muted); font-size: 11px; }
+.backtest-inputs :is(input, select) { color-scheme: dark; background: #111927; border: 1px solid var(--terminal-line); border-radius: 4px; padding: 6px; min-width: 0; min-height: 31px; font-size: 12px; }
+.backtest-inputs :disabled, .backtest-terminal button:disabled { opacity: .55; cursor: not-allowed; }
+.backtest-settings .backtest-run { width: 100%; padding: 8px; border-radius: 4px; background: #1b473c; border: 1px solid #386f5d; color: #c9f9e7; font-weight: 720; }
+.backtest-settings .backtest-run:hover:not(:disabled) { background: #245c4d; }
+.backtest-settings .backtest-feedback { margin-top: 9px; font-size: 11px; line-height: 1.45; color: var(--terminal-muted); }
+.backtest-settings .backtest-feedback.bad { color: var(--negative); }
+.backtest-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 12px; margin: 0; }
+.backtest-facts dd { margin-top: 5px; }
+.backtest-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

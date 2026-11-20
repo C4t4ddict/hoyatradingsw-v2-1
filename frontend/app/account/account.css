@@ -1,0 +1,16 @@
+.account-panel-heading { padding: 10px 12px; border-block-end: 1px solid var(--terminal-line); background: var(--terminal-plot); }
+.account-balances { padding: 12px; }
+.account-balances dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin: 0; }
+.account-balances dd { margin-top: 6px; font-size: 17px; font-weight: 680; }
+.account-balances meter { display: block; width: 100%; margin-top: 8px; height: 10px; accent-color: #52cda7; }
+.account-auth form { display: grid; gap: 8px; margin: 12px 0; }
+.account-auth label { display: grid; gap: 5px; color: var(--terminal-muted); font-size: 11px; }
+.account-auth input { border-radius: 4px; background: #111927; padding: 7px 8px; }
+.account-auth .account-muted { color: var(--terminal-muted); margin: 8px 0; font-size: 11px; line-height: 1.45; }
+.account-auth .account-muted.bad { color: var(--negative); }
+.account-auth .account-muted.good { color: var(--positive); }
+.account-auth .account-muted.warn { color: var(--warning); }
+.account-auth .account-button { border-radius: 4px; border: 1px solid var(--terminal-line); padding: 7px; background: #1d2a3c; }
+.account-auth .account-primary { background: #1b473c; border-color: #386f5d; color: #c9f9e7; font-weight: 680; }
+.account-auth .account-button:disabled { opacity: .53; cursor: not-allowed; }
+.account-auth .account-button:hover:not(:disabled) { border-color: #80a8c7; }

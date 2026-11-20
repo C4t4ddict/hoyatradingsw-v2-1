@@ -7,12 +7,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, wait
 from urllib.parse import quote, urlencode
+from urllib.request import Request
 
 import feedparser
+from signal_quality import SignalQualityStore, deduplicate_events, weight_events_by_source
+from news_sources import publisher_matches, treasury_entries
+from public_http import open_public_request, read_public_body
 
 CACHE_PATH = Path(os.getenv("MARKET_INTEL_CACHE_PATH", "data/market_intel_cache.json"))
 CACHE_TTL_SEC = int(os.getenv("MARKET_INTEL_CACHE_TTL_SEC", "300"))
+SOURCE_TIMEOUT_SEC = float(os.getenv("MARKET_INTEL_SOURCE_TIMEOUT_SEC", "3.0"))
+COLLECTION_BUDGET_SEC = float(os.getenv("MARKET_INTEL_COLLECTION_BUDGET_SEC", "8.0"))
+MAX_SOURCE_WORKERS = int(os.getenv("MARKET_INTEL_MAX_WORKERS", "6"))
 
 
 @dataclass
@@ -21,16 +29,26 @@ class Source:
     url: str
     kind: str  # news | official | tweet
     trust: float
+    transport: str = 'rss'
+    publisher_domain: str = ''
+
+
+def _google_news_rss(query: str) -> str:
+    q = urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    return f"https://news.google.com/rss/search?{q}"
 
 
 DEFAULT_SOURCES: List[Source] = [
-    Source("Reuters Business", "https://feeds.reuters.com/reuters/businessNews", "news", 0.95),
-    Source("Reuters World", "https://feeds.reuters.com/Reuters/worldNews", "news", 0.95),
+    Source("Reuters Business", _google_news_rss('site:reuters.com/business when:7d'), "news", 0.95,
+           transport='google_news_rss', publisher_domain='reuters.com'),
+    Source("Reuters World", _google_news_rss('site:reuters.com/world when:7d'), "news", 0.95,
+           transport='google_news_rss', publisher_domain='reuters.com'),
     Source("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/", "news", 0.85),
     Source("The Block", "https://www.theblock.co/rss.xml", "news", 0.85),
     Source("Federal Reserve Press", "https://www.federalreserve.gov/feeds/press_all.xml", "official", 1.0),
     Source("SEC Press", "https://www.sec.gov/news/pressreleases.rss", "official", 0.98),
-    Source("U.S. Treasury", "https://home.treasury.gov/news/press-releases/rss", "official", 0.97),
+    Source("U.S. Treasury", "https://home.treasury.gov/news/press-releases", "official", 0.97,
+           transport='treasury_html'),
 ]
 
 
@@ -96,11 +114,6 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 
-def _google_news_rss(query: str) -> str:
-    q = urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
-    return f"https://news.google.com/rss/search?{q}"
-
-
 def _iter_sources() -> List[Source]:
     extra = os.getenv("MARKET_INTEL_EXTRA_RSS", "").strip()
     tweet_rss = os.getenv("MARKET_INTEL_TWEET_RSS", "").strip()
@@ -146,47 +159,99 @@ def _iter_sources() -> List[Source]:
     return items
 
 
-def fetch_items(per_source: int = 8) -> List[Dict]:
+def _parse_source(src: Source, per_source: int, timeout_sec: float) -> List[Dict]:
     rows: List[Dict] = []
-    for src in _iter_sources():
-        try:
-            feed = feedparser.parse(src.url)
-            for e in (feed.entries or [])[:per_source]:
-                title = _clean(getattr(e, "title", ""))
-                summary = _clean(getattr(e, "summary", ""))
-                link = getattr(e, "link", "")
-                published = getattr(e, "published", "")
-                score = _event_score(title, summary, src.trust)
-                if score == 0.0:
-                    continue
-                topic = _classify_topic(title, summary)
-                event_id = hashlib.sha1(f"{src.name}|{title}|{published}|{link}".encode("utf-8")).hexdigest()
-                rows.append({
-                    "event_id": event_id,
-                    "event_time": datetime.now(timezone.utc).isoformat(),
-                    "source": src.name,
-                    "kind": src.kind,
-                    "topic": topic,
-                    "title": title,
-                    "summary": summary,
-                    "link": link,
-                    "published": published,
-                    "score": score,
-                    "trust": src.trust,
-                    "is_trump": _contains_any(f"{title} {summary}", TRUMP_WORDS) > 0,
-                    "is_scheduled": _contains_any(f"{title} {summary}", SCHEDULE_WORDS) > 0,
-                })
-        except Exception:
+    request = Request(src.url, headers={"User-Agent": "HoyaTradingSW/2.1 market-intel"})
+    with open_public_request(request, timeout=max(0.1, timeout_sec)) as response:
+        payload = read_public_body(response)
+    if src.transport == 'treasury_html':
+        entries = treasury_entries(payload)
+    else:
+        feed = feedparser.parse(payload)
+        if not feed.get('version') or (feed.get('bozo') and not feed.entries):
+            raise ValueError(f'{src.name}: response is not a usable RSS/Atom feed')
+        entries = feed.entries or []
+    if src.publisher_domain:
+        entries = [entry for entry in entries
+                   if publisher_matches((entry.get('source') or {}).get('href', ''), src.publisher_domain)]
+    for entry in entries[:per_source]:
+        title = _clean(entry.get("title", ""))
+        summary = _clean(entry.get("summary", ""))
+        link = entry.get("link", "")
+        published = entry.get("published", "")
+        if src.publisher_domain and not str(link).startswith('https://'):
             continue
+        score = _event_score(title, summary, src.trust)
+        if score == 0.0:
+            continue
+        topic = _classify_topic(title, summary)
+        event_id = hashlib.sha1(f"{src.name}|{title}|{published}|{link}".encode("utf-8")).hexdigest()
+        rows.append({
+            "event_id": event_id,
+            "event_time": datetime.now(timezone.utc).isoformat(),
+            "source": src.name,
+            "source_transport": src.transport,
+            "source_url": src.url,
+            "publisher_url": (entry.get('source') or {}).get('href'),
+            "kind": src.kind,
+            "topic": topic,
+            "title": title,
+            "summary": summary,
+            "link": link,
+            "published": published,
+            "score": score,
+            "trust": src.trust,
+            "is_trump": _contains_any(f"{title} {summary}", TRUMP_WORDS) > 0,
+            "is_scheduled": _contains_any(f"{title} {summary}", SCHEDULE_WORDS) > 0,
+        })
+    return rows
+
+
+def _fetch_items_result(per_source: int = 8) -> Dict:
+    sources = _iter_sources()
+    started = time.monotonic()
+    executor = ThreadPoolExecutor(max_workers=max(1, min(MAX_SOURCE_WORKERS, len(sources) or 1)))
+    futures = {
+        executor.submit(_parse_source, source, per_source, SOURCE_TIMEOUT_SEC): source
+        for source in sources
+    }
+    done, pending = wait(futures, timeout=max(0.1, COLLECTION_BUDGET_SEC))
+    rows: List[Dict] = []
+    failures = []
+    for future in done:
+        source = futures[future]
+        try:
+            rows.extend(future.result())
+        except Exception as exc:
+            failures.append({"source": source.name, "error": type(exc).__name__})
+    timed_out = [futures[future].name for future in pending]
+    for future in pending:
+        future.cancel()
+    executor.shutdown(wait=False, cancel_futures=True)
 
     rows.sort(key=lambda x: abs(float(x.get("score", 0.0))), reverse=True)
-    return rows
+    return {
+        "rows": rows,
+        "status": {
+            "sources": len(sources),
+            "completed": len(done),
+            "failed": failures,
+            "timed_out": timed_out,
+            "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+        },
+    }
+
+
+def fetch_items(per_source: int = 8) -> List[Dict]:
+    return _fetch_items_result(per_source=per_source)["rows"]
 
 
 def summarize_market(rows: List[Dict]) -> Dict:
     if not rows:
         return {
             "score": 0.0,
+            "long_score": 0.0,
+            "short_score": 0.0,
             "bias": "neutral",
             "confidence": 0.0,
             "count": 0,
@@ -198,6 +263,8 @@ def summarize_market(rows: List[Dict]) -> Dict:
         }
 
     score = sum(float(r.get("score", 0.0)) for r in rows)
+    long_score = sum(max(0.0, float(r.get("score", 0.0))) for r in rows)
+    short_score = sum(max(0.0, -float(r.get("score", 0.0))) for r in rows)
     confidence = min(1.0, (sum(float(r.get("trust", 0.0)) for r in rows) / max(1, len(rows))))
     bias = "bullish" if score > 1.2 else ("bearish" if score < -1.2 else "neutral")
     count_news = sum(1 for r in rows if r.get("kind") == "news")
@@ -217,6 +284,8 @@ def summarize_market(rows: List[Dict]) -> Dict:
 
     return {
         "score": round(score, 4),
+        "long_score": round(long_score, 4),
+        "short_score": round(short_score, 4),
         "bias": bias,
         "confidence": round(confidence, 4),
         "count": len(rows),
@@ -245,8 +314,28 @@ def get_market_brief(force_refresh: bool = False) -> Dict:
         except Exception:
             pass
 
-    rows = fetch_items(per_source=8)
+    stale_cache = None
+    if CACHE_PATH.exists():
+        try:
+            stale_cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            stale_cache = None
+
+    collection = _fetch_items_result(per_source=8)
+    rows = deduplicate_events(collection["rows"])
+    try:
+        quality_store = SignalQualityStore(os.getenv("SIGNAL_QUALITY_PATH", "data/signal_quality.sqlite3"))
+        rows = weight_events_by_source(rows, quality_store.source_reliability())
+    except Exception:
+        pass
+    if not rows and stale_cache:
+        stale_cache.pop("_cached_at", None)
+        stale_cache["collection_status"] = {**collection["status"], "fallback": "stale_cache"}
+        stale_cache["stale"] = True
+        return stale_cache
     brief = summarize_market(rows)
+    brief["collection_status"] = {**collection["status"], "fallback": None}
+    brief["stale"] = False
     try:
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         out = dict(brief)

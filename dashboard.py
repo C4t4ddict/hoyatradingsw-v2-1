@@ -30,7 +30,7 @@ from market_symbols import fetch_symbols
 from news_panel import get_macro_crypto_news
 from paper_live import load_state as load_paper_state, start_session as start_paper_session, pause_session as pause_paper_session, resume_session as resume_paper_session, reset_session as reset_paper_session, update_session as update_paper_session
 from market_intel import get_market_brief
-from predict_model import predict_event
+from predict_model import positive_probability, predict_event
 
 load_dotenv()
 
@@ -118,9 +118,9 @@ if ml_pred:
     p1_ = ml_pred.get("label_up_1h", {})
     p4_ = ml_pred.get("label_up_4h", {})
     p24_ = ml_pred.get("label_up_24h", {})
-    up1_ = (p1_.get("proba", [0, 0])[1] if p1_.get("ok") and len(p1_.get("proba", [])) > 1 else 0)
-    up4_ = (p4_.get("proba", [0, 0])[1] if p4_.get("ok") and len(p4_.get("proba", [])) > 1 else 0)
-    up24_ = (p24_.get("proba", [0, 0])[1] if p24_.get("ok") and len(p24_.get("proba", [])) > 1 else 0)
+    up1_ = positive_probability(p1_)
+    up4_ = positive_probability(p4_)
+    up24_ = positive_probability(p24_)
     ml_composite_dashboard = (up1_ * 0.2) + (up4_ * 0.5) + (up24_ * 0.3)
 else:
     ml_composite_dashboard = 0.0
@@ -1206,9 +1206,9 @@ with tab_market:
     pred_1h = ml_pred.get("label_up_1h", {})
     pred_4h = ml_pred.get("label_up_4h", {})
     pred_24h = ml_pred.get("label_up_24h", {})
-    p1.metric("1h 상승확률", f"{((pred_1h.get('proba', [0, 0])[1] if pred_1h.get('ok') and len(pred_1h.get('proba', [])) > 1 else 0) * 100):.1f}%")
-    p2.metric("4h 상승확률", f"{((pred_4h.get('proba', [0, 0])[1] if pred_4h.get('ok') and len(pred_4h.get('proba', [])) > 1 else 0) * 100):.1f}%")
-    p3.metric("24h 상승확률", f"{((pred_24h.get('proba', [0, 0])[1] if pred_24h.get('ok') and len(pred_24h.get('proba', [])) > 1 else 0) * 100):.1f}%")
+    p1.metric("1h 상승확률", f"{positive_probability(pred_1h) * 100:.1f}%")
+    p2.metric("4h 상승확률", f"{positive_probability(pred_4h) * 100:.1f}%")
+    p3.metric("24h 상승확률", f"{positive_probability(pred_24h) * 100:.1f}%")
     p4.metric("혼합 ML 점수", f"{ml_composite_dashboard * 100:.1f}%")
     model_family = pred_4h.get('model_family') or pred_1h.get('model_family') or 'none'
     st.caption(f"현재 예측 엔진: {model_family}")

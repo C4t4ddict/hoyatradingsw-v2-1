@@ -1,117 +1,65 @@
+import Link from 'next/link'
 import { fetchJson } from '../lib/api'
-
-function fmt(n, suffix = '') {
-  const v = Number(n || 0)
-  return `${v.toFixed(2)}${suffix}`
-}
-
-function buildRiskChip(risk){
-  const futures = risk?.risk_guard?.futures || {}
-  if (futures.enabled === false) return { label: 'Guardrail Off', className: 'bad' }
-  if (futures.max_leverage && Number(futures.max_leverage) <= 5) return { label: 'Guardrail Strict', className: 'warn' }
-  return { label: 'Guardrail Active', className: 'good' }
-}
+import { eventTime, number, percent, timeLabel } from '../lib/trading-chart.mjs'
+import CandleChart from './terminal/CandleChart'
+import { DetailTable, MetricStrip, NewsItem, SignalDetails, SignalResults, Tabs } from './terminal/Terminal'
+import './terminal/terminal.css'
 
 export default async function Page() {
-  let overview = null, paper = null, risk = null
-  try { overview = await fetchJson('/api/overview') } catch {}
-  try { paper = await fetchJson('/api/paper') } catch {}
-  try { risk = await fetchJson('/api/risk') } catch {}
-
-  const s = overview?.summary || {}
-  const b = overview?.market_brief || {}
-  const m = paper?.metrics || {}
-  const ml = overview?.ml_signal || {}
-  const d = ml?.decision || {}
-  const top = b.top || []
-  const pnlClass = Number(m.realized_pnl || s.realized_pnl || 0) >= 0 ? 'good' : 'bad'
-  const riskChip = buildRiskChip(risk)
-
-  return (
-    <>
-      <div className="topbar">
-        <div>
-          <div className="topbar-title">Luminous Intelligence Dashboard</div>
-          <div className="topbar-sub">시장 인텔리전스, ML 보조 판단, paper trading 상태를 하나의 컨트롤 센터에서 관리</div>
-        </div>
-        <div className="chip good">System bias · {(d.bias || b.bias || 'neutral').toUpperCase()}</div>
+  const results = await Promise.allSettled(['/api/overview', '/api/paper', '/api/runtime'].map(fetchJson))
+  const [overview, paper, runtime] = results.map(result => result.status === 'fulfilled' ? result.value : null)
+  const brief = overview?.market_brief
+  const news = brief?.top ?? []
+  const signals = runtime?.signals
+  const jobs = runtime?.jobs ?? []
+  const failures = jobs.filter(job => job.error).length
+  const worker = runtime?.worker
+  const collector = !worker ? '확인 불가' : !worker.enabled ? '일시정지'
+    : !worker.alive ? '중단' : failures ? `오류 ${failures}건` : '정상'
+  const lastSuccess = Math.max(0, ...jobs.map(job => job.succeeded ?? 0))
+  const paperState = !paper ? '확인 불가' : paper.paused ? '일시정지' : paper.running ? '운용 중' : '중지'
+  const metrics = paper?.metrics
+  const markers = [
+    ...news.map(item => ({ time: eventTime(item.event_time), kind: 'news', label: item.title_ko || item.title })),
+    ...(signals?.recent ?? []).map(item => ({ time: item.observed_ms, symbol: item.symbol, kind: 'signal',
+      label: `${item.direction > 0 ? '상승' : '하락'} 관찰 · ${item.horizon}시간` })),
+  ]
+  return <div className="terminal">
+    <header className="terminal-header">
+      <div><p className="terminal-eyebrow">HOYA / 시장</p><h1>트레이딩 대시보드</h1></div>
+      <div className="terminal-header-actions">
+        <span className={collector === '정상' ? 'terminal-tag good' : 'terminal-tag warn'}>● 수집 {collector}</span>
+        <Link className="terminal-link" href="/paper">모의투자 열기 <span aria-hidden="true">↗</span></Link>
       </div>
-
-      <h1 className="page-title">Dashboard</h1>
-      <p className="page-sub">라이브 인텔을 우선으로 두고 ML 보조 점수와 paper 운영 현황을 연결하는 메인 대시보드</p>
-
-      <div className="grid">
-        <div className="card span-3 emphasis"><div className="metric-label">Paper Balance</div><div className="metric-value mono">${fmt(m.virtual_balance)}</div><div className="metric-note">시작 잔액 대비 현재 가상 잔고</div></div>
-        <div className="card span-3"><div className="metric-label">Daily / Realized PnL</div><div className={`metric-value mono ${pnlClass}`}>${fmt(m.realized_pnl || s.realized_pnl)}</div><div className="metric-note">실현 손익 기준</div></div>
-        <div className="card span-3"><div className="metric-label">Cumulative Return</div><div className="metric-value mono">{fmt(m.return_pct || s.return_pct, '%')}</div><div className="metric-note">누적 수익률</div></div>
-        <div className="card span-3"><div className="metric-label">Market Bias</div><div className="metric-value">{(d.bias || b.bias || 'neutral').toUpperCase()}</div><div className="metric-note">ML + live intel 종합 판단</div></div>
-
-        <div className="card span-7 emphasis">
-          <div className="split">
-            <div>
-              <div className="metric-label">Primary Decision</div>
-              <div className="metric-value">{(d.bias || 'neutral').toUpperCase()}</div>
-              <p className="section-sub">live intel을 우선으로 보고, ML bias와 fallback 상태를 함께 보여주는 핵심 의사결정 카드</p>
-            </div>
-            <div className="mini-grid" style={{minWidth:280}}>
-              <div className="card soft"><div className="metric-label">ML Long</div><div className="metric-value good mono">{fmt(ml?.scores?.long_score)}</div></div>
-              <div className="card soft"><div className="metric-label">ML Short</div><div className="metric-value bad mono">{fmt(ml?.scores?.short_score)}</div></div>
-              <div className="card soft"><div className="metric-label">Live Long</div><div className="metric-value good mono">{fmt(b.long_score)}</div></div>
-              <div className="card soft"><div className="metric-label">Live Short</div><div className="metric-value bad mono">{fmt(b.short_score)}</div></div>
-            </div>
-          </div>
-          <div style={{marginTop:18}}>
-            <div className="split">
-              <span className="metric-note">Fallback Strategy Status</span>
-              <span className="chip warn">{paper?.fallback_mode || 'inactive'}</span>
-            </div>
-            <div className="progress" style={{marginTop:10}}><span style={{width:`${Math.min(100, Math.max(8, Number(d.strength || 0) * 100))}%`}} /></div>
-          </div>
-        </div>
-
-        <div className="card span-5">
-          <div className="section-title">Paper Trading Snapshot</div>
-          <div className="mini-grid">
-            <div><div className="metric-label">Status</div><div className="metric-value">{paper?.running ? 'RUN' : (paper?.paused ? 'PAUSE' : 'STOP')}</div></div>
-            <div><div className="metric-label">Executed Strategy</div><div className="metric-value" style={{fontSize:22}}>{paper?.executed_strategy || '-'}</div></div>
-            <div><div className="metric-label">Timeframe</div><div className="metric-value" style={{fontSize:22}}>{paper?.executed_timeframe || '-'}</div></div>
-            <div><div className="metric-label">Position Mode</div><div className="metric-value" style={{fontSize:22}}>{paper?.executed_position_mode || '-'}</div></div>
-          </div>
-          <div style={{marginTop:16}} className="metric-note">즉시 반영이 중요한 paper config / symbol / leverage 상태를 운영 관점에서 표시</div>
-        </div>
-
-        <div className="card span-8">
-          <div className="section-title">Market Intel Preview</div>
-          <div className="section-sub">최신 이벤트를 source / topic / long-short 영향 기준으로 스캔</div>
-          {top.slice(0, 6).map((item, idx) => (
-            <div key={idx} className="feed-item">
-              <div className="split">
-                <div>
-                  <div style={{fontWeight:700, marginBottom:6}}>{item.title || '-'}</div>
-                  <div className="metric-note">{item.source || '-'} · {item.topic || '-'} · {item.event_time || item.published || '-'}</div>
-                </div>
-                <div style={{display:'flex', gap:8}}>
-                  <span className="chip good">L {fmt(item.long_event_score)}</span>
-                  <span className="chip bad">S {fmt(item.short_event_score)}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="card span-4">
-          <div className="section-title">Risk Snapshot</div>
-          <div className="metric-label">Open Positions</div>
-          <div className="metric-value mono">{s.total_trades || 0}</div>
-          <div className="section-sub">실시간 리스크 페이지에서 drawdown / daily loss / 실행 정책을 상세 확인</div>
-          <div className={`chip ${riskChip.className}`}>{riskChip.label}</div>
-        </div>
-
-        <div className="card span-12">
-          <div className="section-title">Product Narrative</div>
-          <div className="section-sub">v2.1은 뉴스·거시·정책·트럼프/코인 발언을 기반으로 양방향 ML 예측을 수행하고, 이를 paper/live 운용 판단으로 연결하는 플랫폼이다.</div>
-        </div>
-      </div>
-    </>
-  )
+    </header>
+    <MetricStrip items={[
+      ['모의투자 상태', paperState, paper?.running && !paper?.paused ? 'good' : undefined],
+      ['가상 자산 · USDT', number(metrics?.virtual_balance)],
+      ['누적 수익률', percent(metrics?.return_pct), metrics?.return_pct == null ? undefined : metrics.return_pct >= 0 ? 'good' : 'bad'],
+      ['일일 손실 한도', percent(paper?.daily_loss_limit_pct, 100)],
+      ['최근 수집 성공 (KST)', lastSuccess ? timeLabel(lastSuccess * 1000) : '—'],
+    ]} />
+    <div className="terminal-workspace">
+      <CandleChart markers={markers} />
+      <aside aria-label="시장 신호와 뉴스" className="terminal-panel terminal-context">
+        <SignalDetails signal={overview?.ml_signal} brief={brief} />
+        <div className="terminal-panel-heading terminal-divider"><h2>뉴스 근거</h2><Link href="/intel">전체 보기 ↗</Link></div>
+        {news.length ? news.slice(0, 3).map((item, index) => <NewsItem key={item.event_id || index} item={item} />)
+          : <p className="terminal-empty">{brief ? '관련 뉴스가 없습니다.' : '뉴스를 불러오지 못했습니다.'}</p>}
+      </aside>
+    </div>
+    <Tabs tabs={[
+      ['신호 결과', <SignalResults key="signals" signals={signals} />],
+      ['시장 뉴스', <div key="news" className="terminal-news-list">
+        {news.length ? news.map((item, index) => <NewsItem key={item.event_id || index} item={item} />)
+          : <p className="terminal-empty">{brief ? '관련 뉴스가 없습니다.' : '뉴스를 불러오지 못했습니다.'}</p>}
+      </div>],
+      ['수집 로그', <DetailTable key="jobs" columns={['작업', '상태', '최근 성공 (KST)', '오류']}
+        empty={runtime ? '수집 기록이 없습니다.' : '수집 기록을 불러오지 못했습니다.'}
+        rows={jobs.map(job => ({ id: job.name, cells: [
+          job.name, job.error ? '오류' : job.succeeded ? '성공' : '대기',
+          job.succeeded ? timeLabel(job.succeeded * 1000) : '—', job.error || '—',
+        ] }))} />],
+    ]} />
+  </div>
 }

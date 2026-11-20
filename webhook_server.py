@@ -1,5 +1,6 @@
 import os
 import json
+import secrets
 import threading
 import time
 from datetime import datetime, timezone
@@ -31,11 +32,13 @@ from strategy_store import (
 )
 from market_intel import get_market_brief, fetch_items
 from ml_dataset import append_events, load_events, enrich_with_price_labels
-from predict_model import predict_event
+from predict_model import positive_probability, predict_event
+from live_controls import get_live_control_store
+from security import mask_text, resolve_secret
 
 load_dotenv()
 
-app = FastAPI(title="Pine Webhook Trader")
+app = FastAPI(title="Pine Webhook Trader", docs_url=None, redoc_url=None, openapi_url=None)
 
 with open("config.example.yaml", "r", encoding="utf-8") as f:
     CFG = yaml.safe_load(f)
@@ -48,7 +51,7 @@ allowed_spot = set(trade_cfg.get("allowed_symbols_spot", trade_cfg.get("allowed_
 allowed_futures = set(trade_cfg.get("allowed_symbols_futures", ["BTC/USDT:USDT", "ETH/USDT:USDT"]))
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
-WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
+WEBHOOK_TOKEN = resolve_secret("WEBHOOK_TOKEN")
 WEBHOOK_MIN_EXPECTED_RETURN_PCT = float(os.getenv("WEBHOOK_MIN_EXPECTED_RETURN_PCT", "-999"))
 WEBHOOK_MAX_ALLOWED_MDD_PCT = float(os.getenv("WEBHOOK_MAX_ALLOWED_MDD_PCT", "999"))
 WEBHOOK_AUTO_SELECT_VERSION = os.getenv("WEBHOOK_AUTO_SELECT_VERSION", "false").lower() == "true"
@@ -72,6 +75,19 @@ ML_WEIGHT_4H = float(os.getenv("ML_WEIGHT_4H", "0.5"))
 ML_WEIGHT_24H = float(os.getenv("ML_WEIGHT_24H", "0.3"))
 ML_MIN_COMPOSITE_SCORE = float(os.getenv("ML_MIN_COMPOSITE_SCORE", "0.54"))
 ML_MIN_SHORT_CONFIRM = float(os.getenv("ML_MIN_SHORT_CONFIRM", "0.50"))
+
+
+def _authorize_webhook(token: Optional[str]) -> None:
+    if not WEBHOOK_TOKEN or WEBHOOK_TOKEN == 'CHANGE_ME':
+        raise HTTPException(503, "WEBHOOK_TOKEN is not configured")
+    if not isinstance(token, str) or not secrets.compare_digest(token.encode("utf-8"), WEBHOOK_TOKEN.encode("utf-8")):
+        raise HTTPException(401, "invalid webhook token")
+
+
+def _authorize_live_order(position_usdt: float, effective_dry_run: bool):
+    if effective_dry_run:
+        return {"allowed": True, "reasons": [], "control": {"mode": "paper"}}
+    return get_live_control_store().authorize_order(position_usdt)
 
 
 def _market_kind(v: Optional[str]) -> str:
@@ -399,8 +415,7 @@ def health():
 
 @app.get("/account/status")
 def account_status(market_type: str = "spot", x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     mt = _market_kind(market_type)
     ex = _get_exchange(mt, read_only=False)
@@ -412,8 +427,7 @@ def account_status(market_type: str = "spot", x_webhook_token: Optional[str] = H
 
 @app.get("/strategy/params")
 def strategy_params(symbol: str, timeframe: str, strategy: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     latest = get_strategy_params(symbol, timeframe, strategy)
     versions = list_strategy_versions(symbol, timeframe, strategy)
@@ -430,8 +444,7 @@ def strategy_params(symbol: str, timeframe: str, strategy: str, x_webhook_token:
 
 @app.post("/strategy/activate-version")
 def strategy_activate_version(req: StrategyVersionActivateRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     ok = set_latest_from_version(req.symbol, req.timeframe, req.strategy, req.version_index)
     if not ok:
@@ -442,8 +455,7 @@ def strategy_activate_version(req: StrategyVersionActivateRequest, x_webhook_tok
 
 @app.get("/strategy/versions/compare")
 def strategy_versions_compare(symbol: str, timeframe: str, strategy: str, limit: int = 10, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     versions = list_strategy_versions(symbol, timeframe, strategy)
     rows = []
@@ -465,8 +477,7 @@ def strategy_versions_compare(symbol: str, timeframe: str, strategy: str, limit:
 
 @app.post("/strategy/tag")
 def strategy_tag(req: StrategyTagRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     ok = set_strategy_tag(req.symbol, req.timeframe, req.strategy, req.tag, req.version_index)
     if not ok:
@@ -476,16 +487,14 @@ def strategy_tag(req: StrategyTagRequest, x_webhook_token: Optional[str] = Heade
 
 @app.get("/strategy/tag")
 def strategy_tag_get(symbol: str, timeframe: str, strategy: str, tag: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
     data = get_strategy_tag(symbol, timeframe, strategy, tag)
     return {"ok": True, "symbol": symbol, "timeframe": timeframe, "strategy": strategy, "tag": tag, "data": data}
 
 
 @app.post("/strategy/promote")
 def strategy_promote(req: StrategyPromoteRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     src = get_strategy_tag(req.symbol, req.timeframe, req.strategy, req.from_tag)
     idx = src.get("version_index") if isinstance(src, dict) else None
@@ -501,8 +510,7 @@ def strategy_promote(req: StrategyPromoteRequest, x_webhook_token: Optional[str]
 
 @app.post("/strategy/lock")
 def strategy_lock(req: StrategyLockRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     ok = set_strategy_lock(req.symbol, req.timeframe, req.strategy, req.locked, req.reason)
     if not ok:
@@ -512,24 +520,21 @@ def strategy_lock(req: StrategyLockRequest, x_webhook_token: Optional[str] = Hea
 
 @app.get("/strategy/lock")
 def strategy_lock_get(symbol: str, timeframe: str, strategy: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
     data = get_strategy_lock(symbol, timeframe, strategy)
     return {"ok": True, "symbol": symbol, "timeframe": timeframe, "strategy": strategy, "lock": data}
 
 
 @app.get("/portfolio/weights")
 def portfolio_weights(symbol: str, timeframe: str, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
     data = get_portfolio_weights(symbol, timeframe)
     return {"ok": True, "symbol": symbol, "timeframe": timeframe, "weights": data}
 
 
 @app.post("/portfolio/weights")
 def portfolio_weights_save(req: PortfolioWeightRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     total = req.ema + req.rsi + req.breakout
     if total <= 0:
@@ -541,8 +546,7 @@ def portfolio_weights_save(req: PortfolioWeightRequest, x_webhook_token: Optiona
 
 @app.post("/futures/configure")
 def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     if DRY_RUN:
         return {
@@ -555,6 +559,10 @@ def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] 
             },
         }
 
+    live_authorization = _authorize_live_order(0.0, False)
+    if not live_authorization["allowed"]:
+        return {"ignored": True, "reason": ",".join(live_authorization["reasons"]), "live_control": live_authorization["control"]}
+
     ex = _get_exchange("futures", read_only=False)
     results = {"symbol": req.symbol, "leverage": req.leverage, "margin_mode": req.margin_mode}
 
@@ -562,24 +570,27 @@ def futures_configure(req: FuturesConfigRequest, x_webhook_token: Optional[str] 
         if hasattr(ex, "set_margin_mode"):
             results["set_margin_mode"] = ex.set_margin_mode(req.margin_mode, req.symbol)
     except Exception as e:
-        results["set_margin_mode_error"] = str(e)
+        results["set_margin_mode_error"] = mask_text(str(e))
 
     try:
         if hasattr(ex, "set_leverage"):
             results["set_leverage"] = ex.set_leverage(req.leverage, req.symbol)
     except Exception as e:
-        results["set_leverage_error"] = str(e)
+        results["set_leverage_error"] = mask_text(str(e))
 
     return {"ok": True, **results}
 
 
 @app.post("/futures/position-mode")
 def futures_position_mode(req: FuturesPositionModeRequest, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     if DRY_RUN:
         return {"ok": True, "dry_run": True, "position_mode": "hedge" if req.hedged else "one-way"}
+
+    live_authorization = _authorize_live_order(0.0, False)
+    if not live_authorization["allowed"]:
+        return {"ignored": True, "reason": ",".join(live_authorization["reasons"]), "live_control": live_authorization["control"]}
 
     ex = _get_exchange("futures", read_only=False)
     result = {"position_mode": "hedge" if req.hedged else "one-way"}
@@ -590,15 +601,14 @@ def futures_position_mode(req: FuturesPositionModeRequest, x_webhook_token: Opti
         else:
             raise RuntimeError("exchange does not support set_position_mode")
     except Exception as e:
-        result["set_position_mode_error"] = str(e)
+        result["set_position_mode_error"] = mask_text(str(e))
 
     return {"ok": True, **result}
 
 
 @app.post("/trade/result")
 def trade_result(result: TradeResult, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     mt = _market_kind(result.market_type)
     state = apply_trade_result(result.realized_pnl, _guard_cfg(mt), path=_guard_state_path(mt))
@@ -622,8 +632,7 @@ def trade_result(result: TradeResult, x_webhook_token: Optional[str] = Header(de
 
 @app.post("/report/daily")
 def report_daily(x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     events = read_events()
     s = summarize(events)
@@ -645,8 +654,7 @@ def report_daily(x_webhook_token: Optional[str] = Header(default=None)):
 
 @app.post("/webhook")
 def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None)):
-    if WEBHOOK_TOKEN and x_webhook_token != WEBHOOK_TOKEN:
-        raise HTTPException(401, "invalid webhook token")
+    _authorize_webhook(x_webhook_token)
 
     mt = _market_kind(signal.market_type)
 
@@ -680,8 +688,9 @@ def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None
                 if symbol_active >= symbol_limit:
                     return {"ignored": True, "reason": f"symbol concurrent limit reached({signal.symbol}): {symbol_active}/{symbol_limit}"}
         except Exception as e:
-            maybe_alert("포지션 제한 체크 실패", f"{mt} {str(e)}")
-            return {"ignored": True, "reason": f"cannot verify concurrent positions: {str(e)}"}
+            safe_error = mask_text(str(e))
+            maybe_alert("포지션 제한 체크 실패", f"{mt} {safe_error}")
+            return {"ignored": True, "reason": f"cannot verify concurrent positions: {safe_error}"}
 
     profile_name, profile = resolve_profile(signal.risk_profile)
 
@@ -721,11 +730,11 @@ def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None
         p4 = ml_pred.get("label_up_4h", {})
         p24 = ml_pred.get("label_up_24h", {})
 
-        up5 = float((p5.get("proba") or [0.0, 0.0])[1] if p5.get("ok") and len(p5.get("proba") or []) > 1 else 0.0)
-        up15 = float((p15.get("proba") or [0.0, 0.0])[1] if p15.get("ok") and len(p15.get("proba") or []) > 1 else 0.0)
-        up1 = float((p1.get("proba") or [0.0, 0.0])[1] if p1.get("ok") and len(p1.get("proba") or []) > 1 else 0.0)
-        up4 = float((p4.get("proba") or [0.0, 0.0])[1] if p4.get("ok") and len(p4.get("proba") or []) > 1 else 0.0)
-        up24 = float((p24.get("proba") or [0.0, 0.0])[1] if p24.get("ok") and len(p24.get("proba") or []) > 1 else 0.0)
+        up5 = positive_probability(p5)
+        up15 = positive_probability(p15)
+        up1 = positive_probability(p1)
+        up4 = positive_probability(p4)
+        up24 = positive_probability(p24)
 
         total_w = max(0.0001, ML_WEIGHT_1H + ML_WEIGHT_4H + ML_WEIGHT_24H)
         ml_composite = ((up1 * ML_WEIGHT_1H) + (up4 * ML_WEIGHT_4H) + (up24 * ML_WEIGHT_24H)) / total_w
@@ -823,12 +832,17 @@ def webhook(signal: Signal, x_webhook_token: Optional[str] = Header(default=None
         if WEBHOOK_TEST_TAG_FORCE_DRY_RUN and signal.strategy_tag in ["test", "paper"]:
             effective_dry_run = True
 
+    live_authorization = _authorize_live_order(position_usdt, effective_dry_run)
+    if not live_authorization["allowed"]:
+        return {"ignored": True, "reason": ",".join(live_authorization["reasons"]), "live_control": live_authorization["control"]}
+
     ex = _get_exchange(mt, read_only=False)
     try:
         order = place_market_order(ex, signal.symbol, signal.side, qty, dry_run=effective_dry_run)
     except Exception as e:
-        maybe_alert("주문 실패", f"{mt} {signal.symbol} {signal.side} / {str(e)}")
-        raise HTTPException(500, f"order failed: {str(e)}")
+        safe_error = mask_text(str(e))
+        maybe_alert("주문 실패", f"{mt} {signal.symbol} {signal.side} / {safe_error}")
+        raise HTTPException(500, f"order failed: {safe_error}")
 
     if signal.signal_id:
         save_signal(signal.signal_id)

@@ -1,8 +1,10 @@
 import json
+import hashlib
 import os
 import signal
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict
 
@@ -10,6 +12,10 @@ from backtest import fetch_ohlcv, fetch_funding_rates, run_backtest, run_ensembl
 from exchange import get_exchange
 from notifier import send_telegram
 from market_intel import get_market_brief
+from paper_engine import FOUR_HOURS_MS, EventDrivenPaperEngine, RiskPolicy, VolTargetMomentumStrategy
+from paper_ledger import TradingLedger
+from signal_quality import analyze_market_regime
+from operations import sync_paper_operational_events
 try:
     from app.services.ml_signal_service import build_signal_summary
 except Exception:
@@ -17,6 +23,186 @@ except Exception:
 
 STATE_PATH = os.getenv("PAPER_LIVE_STATE_PATH", "data/paper_live_state.json")
 PID_PATH = os.getenv("PAPER_LIVE_PID_PATH", "data/paper_live_worker.pid")
+LOCK_PATH = os.getenv("PAPER_LIVE_LOCK_PATH", "data/paper_live_worker.lock")
+
+SESSION_DIR = os.getenv("PAPER_LIVE_SESSION_DIR", "data/paper_sessions")
+LEDGER_PATH = os.getenv("TRADING_LEDGER_PATH", "data/trading_ledger.sqlite3")
+BACKUP_DIR = os.getenv("TRADING_LEDGER_BACKUP_DIR", "data/backups")
+
+
+def _code_version() -> str:
+    configured = os.getenv("HOYA_CODE_VERSION", "").strip()
+    if configured:
+        return configured
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            text=True,
+            timeout=2,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _config_hash(config: Dict[str, Any]) -> str:
+    encoded = json.dumps(config or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _append_session_event(state: Dict[str, Any], event_type: str, payload: Dict[str, Any], event_suffix: str) -> bool:
+    session_id = state.get("session_id")
+    if not session_id:
+        return False
+    return TradingLedger(LEDGER_PATH).append_event(
+        event_id=hashlib.sha256(f"{session_id}|{event_suffix}".encode("utf-8")).hexdigest(),
+        session_id=session_id,
+        event_type=event_type,
+        payload=payload,
+        environment="paper",
+        strategy_version=f"{state.get('executed_strategy') or (state.get('config') or {}).get('strategy') or 'unknown'}@{_code_version()}",
+    )
+
+
+def _append_checkpoint(state: Dict[str, Any]) -> None:
+    checkpoint_at = state.get("last_update") or _now_iso()
+    _append_session_event(
+        state,
+        "session_checkpoint",
+        {
+            "checkpoint_at": checkpoint_at,
+            "event_engine": state.get("event_engine"),
+            "metrics": state.get("metrics"),
+            "config_hash": _config_hash(state.get("config") or {}),
+        },
+        f"checkpoint|{checkpoint_at}",
+    )
+
+
+def reconcile_session_state(state: Dict[str, Any], ledger: TradingLedger = None) -> Dict[str, Any]:
+    """Recover the latest durable engine checkpoint and report ledger mismatches."""
+    session_id = state.get("session_id")
+    if not session_id:
+        state["reconciliation"] = {"ok": True, "status": "no_session"}
+        return state
+    ledger = ledger or TradingLedger(LEDGER_PATH)
+    integrity = ledger.verify_integrity(session_id=session_id)
+    events = ledger.list_events(session_id=session_id, limit=5000)
+    checkpoints = [event for event in events if event["event_type"] == "session_checkpoint"]
+    recovered = False
+    if checkpoints:
+        latest = checkpoints[0]["payload"]
+        checkpoint_engine = latest.get("event_engine")
+        if checkpoint_engine and not state.get("event_engine"):
+            state["event_engine"] = checkpoint_engine
+            recovered = True
+        checkpoint_metrics = latest.get("metrics")
+        if checkpoint_metrics and not state.get("metrics"):
+            state["metrics"] = checkpoint_metrics
+            recovered = True
+
+    pending_events = {
+        event["payload"].get("order_id"): event["payload"]
+        for event in events if event["event_type"] == "order_pending"
+    }
+    terminal_order_ids = {
+        event["payload"].get("order_id")
+        for event in events if event["event_type"] in {"order_filled", "order_cancelled"}
+    }
+    ledger_pending = {key: value for key, value in pending_events.items() if key and key not in terminal_order_ids}
+    engine = state.get("event_engine") or {}
+    snapshot_pending = {row.get("order_id"): row for row in engine.get("pending_orders") or []}
+    mismatch = set(ledger_pending) != set(snapshot_pending)
+    if mismatch:
+        engine["pending_orders"] = list(ledger_pending.values())
+        state["event_engine"] = engine
+        recovered = True
+    state["reconciliation"] = {
+        "ok": integrity["ok"],
+        "integrity": integrity,
+        "pending_order_mismatch": mismatch,
+        "ledger_pending_count": len(ledger_pending),
+        "snapshot_pending_count": len(snapshot_pending),
+        "recovered": recovered,
+    }
+    return state
+
+
+def _session_paths(session_id: str):
+    base = os.path.join(SESSION_DIR, session_id)
+    return {
+        "base": base,
+        "session": os.path.join(base, "session.json"),
+        "trades": os.path.join(base, "trades.jsonl"),
+        "alerts": os.path.join(base, "alerts.jsonl"),
+    }
+
+
+def _append_jsonl(path: str, payload: Dict[str, Any]):
+    _ensure_parent(path)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _persist_session_snapshot(state: Dict[str, Any]):
+    session_id = state.get("session_id")
+    if not session_id:
+        return
+    paths = _session_paths(session_id)
+    consistency = _build_consistency_report(state)
+    payload = {
+        "session_id": session_id,
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "config": state.get("config"),
+        "metrics": state.get("metrics"),
+        "executed_strategy": state.get("executed_strategy"),
+        "executed_timeframe": state.get("executed_timeframe"),
+        "executed_position_mode": state.get("executed_position_mode"),
+        "fallback_mode": state.get("fallback_mode"),
+        "status": {"running": state.get("running"), "paused": state.get("paused")},
+        "consistency": consistency,
+    }
+    _ensure_parent(paths["session"])
+    with open(paths["session"], "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _trade_fingerprint(trade: Dict[str, Any]) -> str:
+    raw = "|".join([
+        str(trade.get("entry_ts", "")),
+        str(trade.get("exit_ts", "")),
+        str(trade.get("side", "")),
+        str(trade.get("entry", "")),
+        str(trade.get("exit", "")),
+    ])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _sync_trade_history(state: Dict[str, Any], result: Dict[str, Any]):
+    session_id = state.get("session_id")
+    if not session_id:
+        return
+    paths = _session_paths(session_id)
+    seen = set(state.get("seen_trade_ids") or [])
+    for trade in result.get("trades") or []:
+        trade_id = trade.get("trade_id") or _trade_fingerprint(trade)
+        trade["trade_id"] = trade_id
+        if trade_id in seen:
+            continue
+        seen.add(trade_id)
+        _append_jsonl(paths["trades"], {"session_id": session_id, **trade})
+    state["seen_trade_ids"] = sorted(seen)
+
+
+def _append_alert_log(state: Dict[str, Any], trade_id: str, message: str):
+    session_id = state.get("session_id")
+    if not session_id:
+        return
+    paths = _session_paths(session_id)
+    _append_jsonl(paths["alerts"], {"session_id": session_id, "trade_id": trade_id, "sent_at": _now_iso(), "message": message})
+
 
 
 def _ensure_parent(path: str):
@@ -29,6 +215,155 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
+
+def _read_json(path: str, default: Dict[str, Any] = None) -> Dict[str, Any]:
+    if default is None:
+        default = {}
+    if not os.path.exists(path):
+        return dict(default)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else dict(default)
+    except Exception:
+        return dict(default)
+
+
+def _acquire_lock(path: str = LOCK_PATH) -> bool:
+    _ensure_parent(path)
+    pid = os.getpid()
+    now = _now_iso()
+    if os.path.exists(path):
+        current = _read_json(path, {})
+        lock_pid = int(current.get("pid") or 0)
+        if lock_pid and _is_pid_alive(lock_pid) and lock_pid != pid:
+            return False
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"pid": pid, "acquired_at": now}, f, ensure_ascii=False, indent=2)
+    return True
+
+
+def _release_lock(path: str = LOCK_PATH):
+    try:
+        if os.path.exists(path):
+            current = _read_json(path, {})
+            lock_pid = int(current.get("pid") or 0)
+            if lock_pid in [0, os.getpid()]:
+                os.remove(path)
+    except Exception:
+        pass
+
+
+def _build_consistency_report(state: Dict[str, Any]) -> Dict[str, Any]:
+    report = {"ok": True, "errors": [], "warnings": []}
+    metrics = state.get("metrics") or {}
+    result = state.get("result") or {}
+    config = state.get("config") or {}
+    snapshot = state.get("config_snapshot") or {}
+
+    def add_error(msg: str):
+        report["ok"] = False
+        report["errors"].append(msg)
+
+    if state.get("running") and not state.get("session_id"):
+        add_error("running session without session_id")
+
+    result_trades = result.get("trades") or []
+    metric_trades = int(metrics.get("trades") or 0)
+    total_trades = int(result.get("total_trades") or 0)
+    if metric_trades != total_trades:
+        add_error(f"metrics.trades({metric_trades}) != result.total_trades({total_trades})")
+    if total_trades != len(result_trades):
+        add_error(f"result.total_trades({total_trades}) != len(result.trades)({len(result_trades)})")
+
+    result_final = float(result.get("final_usdt") or metrics.get("virtual_balance") or 0.0)
+    metric_balance = float(metrics.get("virtual_balance") or 0.0)
+    if round(result_final, 8) != round(metric_balance, 8):
+        add_error(f"metrics.virtual_balance({metric_balance}) != result.final_usdt({result_final})")
+
+    result_initial = float(result.get("initial_usdt") or metrics.get("starting_balance") or config.get("initial_usdt") or 0.0)
+    metric_initial = float(metrics.get("starting_balance") or config.get("initial_usdt") or 0.0)
+    if round(result_initial, 8) != round(metric_initial, 8):
+        add_error(f"metrics.starting_balance({metric_initial}) != result.initial_usdt({result_initial})")
+
+    if snapshot:
+        for key in ["symbol", "leverage", "initial_usdt", "market_type", "mode"]:
+            if key in snapshot and key in config and snapshot.get(key) != config.get(key):
+                report["warnings"].append(f"config_snapshot.{key}({snapshot.get(key)}) != config.{key}({config.get(key)})")
+
+    seen_ids = state.get("seen_trade_ids") or []
+    if result_trades and len(seen_ids) and len(seen_ids) < len(result_trades):
+        report["warnings"].append("seen_trade_ids shorter than result trades")
+
+    return report
+
+
+
+
+def _apply_runtime_mismatch_guards(state: Dict[str, Any]) -> Dict[str, Any]:
+    consistency = state.get("consistency") or _build_consistency_report(state)
+    snapshot = state.get("config_snapshot") or {}
+    config = state.get("config") or {}
+    mismatch_keys = []
+    for key in ["symbol", "leverage", "initial_usdt", "market_type", "mode"]:
+        if key in snapshot and key in config and snapshot.get(key) != config.get(key):
+            mismatch_keys.append(key)
+
+    state["runtime_guard"] = {
+        "hasMismatch": bool(mismatch_keys),
+        "mismatchKeys": mismatch_keys,
+        "consistencyOk": consistency.get("ok", True),
+    }
+
+    if mismatch_keys:
+        state["fallback_mode"] = "runtime_mismatch_hold"
+        result = state.get("result") or {}
+        note = result.get("note") or ""
+        msg = f"runtime mismatch detected: {', '.join(mismatch_keys)}"
+        result["note"] = (f"{note} | {msg}").strip(" |")
+        state["result"] = result
+        state["executed_strategy"] = "hold"
+        state["executed_position_mode"] = "flat"
+    return state
+
+def _build_runtime_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "session_id": state.get("session_id"),
+        "running": state.get("running"),
+        "paused": state.get("paused"),
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "worker_pid": state.get("worker_pid"),
+        "config": state.get("config"),
+        "metrics": state.get("metrics"),
+        "result": state.get("result"),
+        "ml_signal": state.get("ml_signal"),
+        "executed_strategy": state.get("executed_strategy"),
+        "executed_timeframe": state.get("executed_timeframe"),
+        "executed_position_mode": state.get("executed_position_mode"),
+        "fallback_mode": state.get("fallback_mode"),
+        "alert_last_trade_count": state.get("alert_last_trade_count"),
+        "seen_trade_ids": state.get("seen_trade_ids"),
+        "sent_alert_trade_ids": state.get("sent_alert_trade_ids"),
+        "config_snapshot": state.get("config_snapshot"),
+        "consistency": state.get("consistency"),
+        "runtime_guard": state.get("runtime_guard"),
+        "event_engine": state.get("event_engine"),
+        "strategy_decision": state.get("strategy_decision"),
+        "order_events": state.get("order_events"),
+        "risk_status": state.get("risk_status"),
+        "market_regime": state.get("market_regime"),
+        "reconciliation": state.get("reconciliation"),
+        "ops_seen_event_keys": state.get("ops_seen_event_keys"),
+        "loss_cooldown_until": state.get("loss_cooldown_until"),
+        "loss_cooldown_trade_count": state.get("loss_cooldown_trade_count"),
+    }
+
+
+def _sanitize_state_for_disk(state: Dict[str, Any]) -> Dict[str, Any]:
+    return _build_runtime_state(state)
+
 def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"running": False}
@@ -40,10 +375,24 @@ def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
         return {"running": False}
 
 
+def _replace_state_file(staged: str, path: str) -> None:
+    os.replace(staged, path)
+
+
 def save_state(state: Dict[str, Any], path: str = STATE_PATH):
     _ensure_parent(path)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    disk_state = _sanitize_state_for_disk(state)
+    parent = os.path.dirname(path) or "."
+    staged = os.path.join(parent, f"paper-state-{uuid.uuid4().hex}.json.tmp")
+    try:
+        with open(staged, "x", encoding="utf-8") as handle:
+            json.dump(disk_state, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_state_file(staged, path)
+    finally:
+        if os.path.exists(staged):
+            os.remove(staged)
 
 
 def _read_pid(path: str = PID_PATH) -> int:
@@ -70,10 +419,32 @@ def _clear_pid(path: str = PID_PATH):
         pass
 
 
+def _windows_pid_alive(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def _is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
+        if sys.platform == 'win32':
+            return _windows_pid_alive(pid)
         os.kill(pid, 0)
         return True
     except Exception:
@@ -105,12 +476,15 @@ def stop_background_worker():
         except Exception:
             pass
     _clear_pid()
+    _release_lock()
 
 
 def start_session(config: Dict[str, Any], path: str = STATE_PATH):
     stop_background_worker()
     initial_usdt = float(config.get("initial_usdt", 1000.0))
+    session_id = str(uuid.uuid4())
     state = {
+        "session_id": session_id,
         "running": True,
         "paused": False,
         "started_at": _now_iso(),
@@ -139,11 +513,23 @@ def start_session(config: Dict[str, Any], path: str = STATE_PATH):
         },
         "fallback_mode": None,
         "alert_last_trade_count": 0,
+        "seen_trade_ids": [],
+        "config_snapshot": dict(config),
     }
+    _append_session_event(
+        state,
+        "session_started",
+        {"config": config, "config_hash": _config_hash(config), "code_version": _code_version()},
+        "session_started",
+    )
+    _append_checkpoint(state)
     save_state(state, path)
+    _persist_session_snapshot(state)
     pid = start_background_worker()
     state["worker_pid"] = pid
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -151,7 +537,10 @@ def pause_session(path: str = STATE_PATH):
     state = load_state(path)
     state["running"] = False
     state["paused"] = True
+    paused_at = _now_iso()
+    _append_session_event(state, "session_paused", {"paused_at": paused_at}, f"paused|{paused_at}")
     save_state(state, path)
+    _persist_session_snapshot(state)
     stop_background_worker()
     return state
 
@@ -169,22 +558,50 @@ def resume_session(config_updates: Dict[str, Any] = None, path: str = STATE_PATH
             base_cfg.update(config_updates)
         return start_session(base_cfg, path)
 
-    state["running"] = True
-    state["paused"] = False
-
-    state["fallback_mode"] = None
     if config_updates:
         cfg = state.get("config") or {}
+        before_hash = _config_hash(cfg)
         cfg.update(config_updates)
         state["config"] = cfg
+        state["config_snapshot"] = dict(cfg)
+        _append_session_event(
+            state,
+            "config_changed",
+            {"before_hash": before_hash, "after_hash": _config_hash(cfg), "changed_keys": sorted(config_updates)},
+            f"config_changed|{_config_hash(cfg)}",
+        )
+
+    state = reconcile_session_state(state)
+    if not (state.get("reconciliation") or {}).get("integrity", {}).get("ok", True):
+        state["running"] = False
+        state["paused"] = True
+        state["fallback_mode"] = "ledger_integrity_hold"
+        save_state(state, path)
+        return state
+
+    state["running"] = True
+    state["paused"] = False
+    state["fallback_mode"] = None
+    state["consistency"] = _build_consistency_report(state)
+    state = _apply_runtime_mismatch_guards(state)
+    if (state.get("runtime_guard") or {}).get("hasMismatch"):
+        state["last_update"] = _now_iso()
+        save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
+        return state
 
     if state.get("alert_last_trade_count") is None:
         state["alert_last_trade_count"] = int((state.get("metrics") or {}).get("trades", 0) or 0)
 
+    resumed_at = _now_iso()
+    _append_session_event(state, "session_resumed", {"resumed_at": resumed_at}, f"resumed|{resumed_at}")
     save_state(state, path)
     pid = start_background_worker()
     state["worker_pid"] = pid
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -195,8 +612,13 @@ def stop_session(path: str = STATE_PATH):
 
 def reset_session(path: str = STATE_PATH):
     stop_background_worker()
-    state = {"running": False, "paused": False, "reset_at": _now_iso(), "metrics": {"virtual_balance": 0.0, "return_pct": 0.0, "trades": 0, "liquidations": 0}}
+    previous = load_state(path)
+    reset_at = _now_iso()
+    _append_session_event(previous, "session_reset", {"reset_at": reset_at}, f"reset|{reset_at}")
+    state = {"running": False, "paused": False, "reset_at": reset_at, "metrics": {"virtual_balance": 0.0, "return_pct": 0.0, "trades": 0, "liquidations": 0}}
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
 
 
@@ -212,10 +634,15 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
         return
 
     symbol = cfg.get("symbol", "-")
+    sent_ids = set(state.get("sent_alert_trade_ids") or [])
     strategy = state.get("executed_strategy") or cfg.get("strategy", "-")
     timeframe = state.get("executed_timeframe") or cfg.get("timeframe", "-")
 
     for t in trades[prev_count:new_count]:
+        trade_id = t.get("trade_id") or _trade_fingerprint(t)
+        t["trade_id"] = trade_id
+        if trade_id in sent_ids:
+            continue
         side = str(t.get("side", "-")).upper()
         entry = t.get("entry")
         exit_ = t.get("exit")
@@ -242,17 +669,302 @@ def _notify_new_trades(state: Dict[str, Any], cfg: Dict[str, Any], result: Dict[
             f"종료 잔액: {round(float(balance_after or 0), 2)}"
         )
         send_telegram(msg, channel="paper")
+        sent_ids.add(trade_id)
+        _append_alert_log(state, trade_id, msg)
 
+    state["sent_alert_trade_ids"] = sorted(sent_ids)
     state["alert_last_trade_count"] = new_count
 
 
+
+
+def get_audit_payload(path: str = STATE_PATH) -> Dict[str, Any]:
+    state = load_state(path)
+    pid = _read_pid()
+    lock = _read_json(LOCK_PATH, {})
+    consistency = state.get("consistency") or _build_consistency_report(state)
+    runtime_guard = state.get("runtime_guard") or {}
+    return {
+        "session_id": state.get("session_id"),
+        "running": state.get("running"),
+        "paused": state.get("paused"),
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "worker": {
+            "pid": pid,
+            "alive": _is_pid_alive(pid),
+        },
+        "lock": {
+            "path": LOCK_PATH,
+            "pid": lock.get("pid"),
+            "alive": _is_pid_alive(int(lock.get("pid") or 0)),
+            "acquired_at": lock.get("acquired_at"),
+        },
+        "metrics": state.get("metrics"),
+        "executed": {
+            "strategy": state.get("executed_strategy"),
+            "timeframe": state.get("executed_timeframe"),
+            "position_mode": state.get("executed_position_mode"),
+            "fallback_mode": state.get("fallback_mode"),
+        },
+        "consistency": consistency,
+        "runtime_guard": runtime_guard,
+        "config_snapshot": state.get("config_snapshot"),
+        "config": state.get("config"),
+        "strategy_decision": state.get("strategy_decision"),
+        "risk_status": state.get("risk_status"),
+        "reconciliation": state.get("reconciliation"),
+        "ledger_integrity": TradingLedger(LEDGER_PATH).verify_integrity(session_id=state.get("session_id")) if state.get("session_id") else {"ok": True, "events_checked": 0, "failures": []},
+        "recent_events": TradingLedger(LEDGER_PATH).list_events(session_id=state.get("session_id"), limit=100) if state.get("session_id") else [],
+    }
+
+
+def get_strategy_payload(path: str = STATE_PATH) -> Dict[str, Any]:
+    state = load_state(path)
+    engine = state.get("event_engine") or {}
+    portfolio = engine.get("portfolio") or {}
+    return {
+        "session_id": state.get("session_id"),
+        "strategy": state.get("executed_strategy"),
+        "timeframe": state.get("executed_timeframe"),
+        "decision": state.get("strategy_decision"),
+        "portfolio": portfolio,
+        "pending_orders": engine.get("pending_orders") or [],
+        "risk_status": state.get("risk_status"),
+        "last_update": state.get("last_update"),
+    }
+
+
+def get_ledger_events(path: str = STATE_PATH, limit: int = 200) -> Dict[str, Any]:
+    state = load_state(path)
+    session_id = state.get("session_id")
+    events = TradingLedger(LEDGER_PATH).list_events(session_id=session_id, limit=limit) if session_id else []
+    return {"session_id": session_id, "count": len(events), "events": events}
+
+
+def backup_ledger(destination: str = None) -> Dict[str, Any]:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = destination or os.path.join(BACKUP_DIR, f"trading-ledger-{timestamp}.sqlite3")
+    ledger = TradingLedger(LEDGER_PATH)
+    ledger.backup(target)
+    return {"path": target, "integrity": TradingLedger(target).verify_integrity()}
+
+
+def restore_ledger(source: str) -> Dict[str, Any]:
+    state = load_state()
+    if state.get("running"):
+        raise ValueError("pause the paper session before restoring the ledger")
+    ledger = TradingLedger(LEDGER_PATH)
+    result = ledger.restore_backup(source)
+    return {**result, "integrity": TradingLedger(LEDGER_PATH).verify_integrity()}
+
+
+def export_ledger_csv(destination: str = None) -> Dict[str, Any]:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = destination or os.path.join(BACKUP_DIR, f"trading-ledger-{timestamp}.csv")
+    TradingLedger(LEDGER_PATH).export_csv(target)
+    return {"path": target}
+
+
+def select_ml_execution_policy(
+    decision: Dict[str, Any], scores: Dict[str, Any], state: Dict[str, Any],
+    *, now: datetime = None, cooldown_hours: int = 24,
+) -> Dict[str, Any]:
+    """Directional validated signals may trade; neutral signals always hold."""
+    current = now or datetime.now(timezone.utc)
+    trades = ((state.get("result") or {}).get("trades") or [])
+    consecutive_losses = 0
+    for trade in reversed(trades[-10:]):
+        if float(trade.get("pnl", 0) or 0) < 0:
+            consecutive_losses += 1
+        else:
+            break
+    trade_count = len(trades)
+    marker = int(state.get("loss_cooldown_trade_count") or -1)
+    if consecutive_losses >= 2 and marker != trade_count:
+        state["loss_cooldown_until"] = (current + timedelta(hours=max(1, cooldown_hours))).isoformat()
+        state["loss_cooldown_trade_count"] = trade_count
+    cooldown_until = state.get("loss_cooldown_until")
+    cooldown_end = None
+    if cooldown_until:
+        try:
+            cooldown_end = datetime.fromisoformat(str(cooldown_until).replace("Z", "+00:00"))
+            if cooldown_end.tzinfo is None:
+                cooldown_end = cooldown_end.replace(tzinfo=timezone.utc)
+        except ValueError:
+            cooldown_end = None
+    if cooldown_end and current < cooldown_end:
+        return {"hold": True, "fallback_mode": "cooldown_after_losses", "strategy": "hold", "timeframe": "15m", "position_mode": "flat"}
+
+    bias = decision.get("bias")
+    if bias in {"short", "lean_short"}:
+        return {"hold": False, "fallback_mode": None, "strategy": "trend_continuation_system", "timeframe": "15m", "position_mode": "short"}
+    if bias in {"long", "lean_long"}:
+        timeframe = "15m" if float(scores.get("up_15m", 0)) >= float(scores.get("up_5m", 0)) else "30m"
+        return {"hold": False, "fallback_mode": None, "strategy": "trend_continuation_system", "timeframe": timeframe, "position_mode": "long"}
+    return {"hold": True, "fallback_mode": "neutral_wait_quality_gate", "strategy": "hold", "timeframe": "15m", "position_mode": "flat"}
+
+
+def _paper_candles(exchange, symbol, start_iso, end_iso):
+    from runtime_data import RuntimeStore
+    store = RuntimeStore()
+    # Collection is owned by run_runtime.py; the trading loop never waits on backfill.
+    return store.candles(symbol)
+
+
+def _update_vol_target_session(state: Dict[str, Any], cfg: Dict[str, Any], path: str) -> Dict[str, Any]:
+    """Advance the portfolio only from confirmed 4h closes and next-bar opens."""
+    now = datetime.now(timezone.utc)
+    now_ms = int(now.timestamp() * 1000)
+    end_iso = now.isoformat()
+    start_iso = (now - timedelta(days=230)).isoformat()
+    symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+    exchange = None
+    histories: Dict[str, Any] = {}
+    for symbol in symbols:
+        try:
+            candles = _paper_candles(exchange, symbol, start_iso, end_iso)
+        except Exception:
+            candles = []
+        histories[symbol] = [row for row in candles if int(row[0]) + FOUR_HOURS_MS <= now_ms]
+
+    ledger = TradingLedger(LEDGER_PATH)
+    btc_history = histories.get("BTC/USDT") or []
+    eth_history = histories.get("ETH/USDT") or []
+    eth_returns = [float(eth_history[index][4]) / float(eth_history[index - 1][4]) - 1.0 for index in range(1, len(eth_history))]
+    regime = analyze_market_regime(
+        [float(row[4]) for row in btc_history],
+        volumes=[float(row[5]) for row in btc_history],
+        funding_rate=0.0,
+        alt_returns=eth_returns,
+    )
+    state["market_regime"] = regime
+    strategy = VolTargetMomentumStrategy(
+        target_volatility=float(cfg.get("target_volatility", 0.20)),
+        exposure_multiplier=float(regime.get("exposure_multiplier", 0.0)),
+    )
+    policy = RiskPolicy(
+        daily_loss_limit_pct=float(cfg.get("daily_loss_limit_pct", 0.02)),
+        reduce_risk_drawdown_pct=float(cfg.get("reduce_risk_drawdown_pct", 0.10)),
+        block_new_buy_drawdown_pct=float(cfg.get("block_new_buy_drawdown_pct", 0.15)),
+        max_spread_bps=float(cfg.get("max_spread_bps", 25.0)),
+    )
+    engine = EventDrivenPaperEngine(
+        session_id=state["session_id"],
+        initial_cash=float(cfg.get("initial_usdt", 1000.0)),
+        ledger=ledger,
+        strategy=strategy,
+        risk_policy=policy,
+        fee_pct=float(cfg.get("taker_fee_pct", cfg.get("fee_pct", 0.0005))),
+        slippage_pct=float(cfg.get("slippage_pct", 0.0005)),
+    )
+    if state.get("event_engine"):
+        engine.restore(state["event_engine"])
+
+    # Never mark a held asset at zero or fill pending orders with incomplete/stale prices.
+    preview = strategy.evaluate(histories, now_ms)
+    expected_bar = now_ms // FOUR_HOURS_MS * FOUR_HOURS_MS - FOUR_HOURS_MS
+    stale = any(not rows or int(rows[-1][0]) != expected_bar for rows in histories.values())
+    if not preview.data_quality['ok'] or stale:
+        from dataclasses import asdict
+        decision = asdict(preview)
+        decision['data_quality']['ok'] = False
+        if stale:
+            decision['data_quality']['errors'].append('stale_market_data')
+        state['strategy_decision'] = decision
+        state['event_engine'] = engine.snapshot()
+        state['risk_status'] = {'data_quality': decision['data_quality']}
+        state['fallback_mode'] = 'data_quality_hold'
+        state['last_update'] = _now_iso()
+        save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
+        return state
+
+    fills = []
+    available = {symbol: rows[-1] for symbol, rows in histories.items() if rows}
+    if available:
+        latest_open_ms = min(int(row[0]) for row in available.values())
+        fills = engine.on_bar_open(
+            timestamp_ms=latest_open_ms,
+            open_prices={symbol: float(row[1]) for symbol, row in available.items()},
+        )
+    outcome = engine.on_bar_close(
+        histories,
+        now_ms=now_ms,
+        balance_consistent=bool((state.get("consistency") or {}).get("ok", True)),
+    )
+    prices = {symbol: float(rows[-1][4]) for symbol, rows in histories.items() if rows}
+    nav = engine.portfolio.equity(prices)
+    engine.portfolio.equity_peak = max(engine.portfolio.equity_peak, nav)
+    initial = engine.portfolio.initial_cash
+    previous_orders = list(state.get("order_events") or [])
+    state["order_events"] = (previous_orders + fills + outcome.get("orders", []))[-200:]
+    state["event_engine"] = engine.snapshot()
+    state["strategy_decision"] = outcome.get("decision")
+    state["risk_status"] = {
+        "data_quality": (outcome.get("decision") or {}).get("data_quality"),
+        "rejected": outcome.get("rejected") or [],
+        "pending_count": len(engine.pending_orders),
+        "drawdown_pct": 1.0 - nav / max(engine.portfolio.equity_peak, 1e-9),
+    }
+    filled_events = ledger.filled_orders(state['session_id'])
+    state["metrics"] = {
+        "virtual_balance": nav,
+        "starting_balance": initial,
+        "realized_pnl": engine.portfolio.daily_realized_pnl,
+        "return_pct": (nav / max(initial, 1e-9) - 1.0) * 100.0,
+        "trades": len(filled_events),
+        "liquidations": 0,
+    }
+    state["result"] = {
+        "initial_usdt": initial,
+        "final_usdt": nav,
+        "return_pct": state["metrics"]["return_pct"],
+        "trades": filled_events,
+        "total_trades": state["metrics"]["trades"],
+        "liquidation_count": 0,
+        "note": "confirmed 4h close signal; pending orders execute at next 4h open",
+    }
+    state["executed_strategy"] = "vol_target_momentum"
+    state["executed_timeframe"] = "4h"
+    state["executed_position_mode"] = "long_cash"
+    state["fallback_mode"] = None if (outcome.get("decision") or {}).get("data_quality", {}).get("ok") else "data_quality_hold"
+    state["last_update"] = _now_iso()
+    state["consistency"] = _build_consistency_report(state)
+    try:
+        sync_paper_operational_events(state)
+    except Exception:
+        pass
+    _append_checkpoint(state)
+    save_state(state, path)
+    _persist_session_snapshot(state)
+    from runtime_evaluation import EvaluationStore
+    EvaluationStore().record_paper(state, filled_events, now_ms=now_ms)
+    _release_lock()
+    return state
+
 def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
+    if not _acquire_lock():
+        return load_state(path)
     state = load_state(path)
     if not state.get("running"):
+        state["consistency"] = _build_consistency_report(state)
+        state = _apply_runtime_mismatch_guards(state)
         return state
 
     cfg = state.get("config") or {}
+    state["consistency"] = _build_consistency_report(state)
+    state = _apply_runtime_mismatch_guards(state)
+    if (state.get("runtime_guard") or {}).get("hasMismatch"):
+        state["last_update"] = _now_iso()
+        save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
+        return state
     state["fallback_mode"] = None
+    if cfg.get("mode") == "vol_target_momentum" or cfg.get("strategy") == "vol_target_momentum":
+        return _update_vol_target_session(state, cfg, path)
     market_type = cfg.get("market_type", "futures")
     symbol = cfg.get("symbol", "BTC/USDT:USDT")
     timeframe = cfg.get("timeframe", "15m")
@@ -267,74 +979,24 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         scores = ml_signal.get('scores') or {}
         state['ml_signal'] = ml_signal
 
-        recent_trades = ((state.get('result') or {}).get('trades') or [])[-3:]
-        consecutive_losses = 0
-        for trade in reversed(recent_trades):
-            if float(trade.get('pnl', 0) or 0) < 0:
-                consecutive_losses += 1
-            else:
-                break
+        selection = select_ml_execution_policy(decision, scores, state)
+        strategy = selection['strategy']
+        position_mode = selection['position_mode']
+        timeframe = selection['timeframe']
+        state['fallback_mode'] = selection['fallback_mode']
 
-        no_trade = False
-        if consecutive_losses >= 2:
-            state['fallback_mode'] = 'cooldown_after_losses'
-            no_trade = True
-
-        if not no_trade and decision.get('bias') in ['short', 'lean_short']:
-            position_mode = 'short'
-            strategy = 'trend_continuation_system'
-            timeframe = '15m'
-        elif not no_trade and decision.get('bias') in ['long', 'lean_long']:
-            position_mode = 'long'
-            strategy = 'trend_continuation_system'
-            timeframe = '15m' if (scores.get('up_15m', 0) >= scores.get('up_5m', 0)) else '30m'
-        else:
-            if not no_trade:
-                state['fallback_mode'] = 'neutral_selector_strict'
-
-                short_agree = scores.get('down_5m', 0) > 0.53 and scores.get('down_15m', 0) > 0.52 and scores.get('intel_short_score', 0) >= scores.get('intel_long_score', 0)
-                long_agree = scores.get('up_5m', 0) > 0.53 and scores.get('up_15m', 0) > 0.52 and scores.get('intel_long_score', 0) >= scores.get('intel_short_score', 0)
-                reversion_agree = (
-                    abs((scores.get('intel_long_score', 0) - scores.get('intel_short_score', 0))) < 1.2 and
-                    max(scores.get('up_5m', 0), scores.get('down_5m', 0), scores.get('up_15m', 0), scores.get('down_15m', 0)) < 0.58
-                )
-
-                if short_agree:
-                    strategy = 'breakout_20'
-                    position_mode = 'short'
-                    timeframe = '15m'
-                    cfg['sl_pct'] = 0.22
-                    cfg['tp_rr'] = 2.8
-                elif long_agree:
-                    strategy = 'trend_continuation_system'
-                    position_mode = 'long'
-                    timeframe = '15m'
-                    cfg['sl_pct'] = 0.22
-                    cfg['tp_rr'] = 2.8
-                elif reversion_agree:
-                    strategy = 'rsi_reversion'
-                    position_mode = 'long'
-                    timeframe = '15m'
-                    cfg['rsi_lower'] = 42
-                    cfg['rsi_upper'] = 58
-                    cfg['sl_pct'] = 0.18
-                    cfg['tp_rr'] = 2.4
-                else:
-                    state['fallback_mode'] = 'neutral_wait'
-                    no_trade = True
-
-        if no_trade:
-            strategy = 'rsi_reversion'
-            position_mode = 'long'
-            timeframe = '15m'
+        if selection['hold']:
             result = state.get('result') or {}
             result['note'] = f"paper hold: {state.get('fallback_mode') or 'no_trade'}"
             state['result'] = result
+            state['consistency'] = _build_consistency_report(state)
             state['executed_strategy'] = 'hold'
             state['executed_timeframe'] = timeframe
             state['executed_position_mode'] = 'flat'
             state['last_update'] = _now_iso()
             save_state(state, path)
+            _persist_session_snapshot(state)
+            _release_lock()
             return state
 
     end_dt = datetime.now(timezone.utc)
@@ -355,8 +1017,11 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
         result = state.get('result') or {}
         result['note'] = f"insufficient candles: {len(candles)} for {timeframe}"
         state['result'] = result
+        state['consistency'] = _build_consistency_report(state)
         state["last_update"] = _now_iso()
         save_state(state, path)
+        _persist_session_snapshot(state)
+        _release_lock()
         return state
 
     funding_events = None
@@ -403,6 +1068,7 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
             tp_rr=float(cfg.get("tp_rr", 1.5)),
         )
 
+    _sync_trade_history(state, result)
     _notify_new_trades(state, cfg, result)
 
     state["last_update"] = _now_iso()
@@ -420,5 +1086,16 @@ def update_session(path: str = STATE_PATH) -> Dict[str, Any]:
     state["executed_position_mode"] = position_mode
     if cfg.get('mode') == 'ml_signal' and state.get('fallback_mode'):
         state['result']['note'] = f"neutral fallback active: {state.get('fallback_mode')}"
+    state['consistency'] = _build_consistency_report(state)
+    if not state['consistency'].get('ok'):
+        note = (state.get('result') or {}).get('note') or ''
+        state['result']['note'] = (f"{note} | consistency warning").strip(' |')
+    try:
+        sync_paper_operational_events(state)
+    except Exception:
+        pass
+    _append_checkpoint(state)
     save_state(state, path)
+    _persist_session_snapshot(state)
+    _release_lock()
     return state
